@@ -2,6 +2,8 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [- fix(deps): logx 地板 v0.5.0 → v0.6.0（零代码改动）
+
 ## [v0.1.1] — 2026-10-17
 
 - fix(deps): 内部依赖地板 logx v0.2.0 → v0.5.0；go 维持 1.26.0——k8s.io/client-go 生态声明 go1.26，暂不做生态级回退
