@@ -117,10 +117,10 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 		},
 	}
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
-		Lock:            lock,
-		LeaseDuration:   leaseDuration,
-		RenewDeadline:   renewDeadline,
-		RetryPeriod:     retryPeriod,
+		Lock:          lock,
+		LeaseDuration: leaseDuration,
+		RenewDeadline: renewDeadline,
+		RetryPeriod:   retryPeriod,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: cfg.OnStartedLeading,
 			OnStoppedLeading: cfg.OnStoppedLeading,

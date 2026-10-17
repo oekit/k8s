@@ -15,11 +15,11 @@ func startElector(t *testing.T, client *fake.Clientset, name string,
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	le, err := New(client, Config{
-		LeaseName:       "app",
-		Identity:        name, // 显式身份：默认 hostname 会让同进程双 elector 互认
-		LeaseDuration:   2 * time.Second,
-		RenewDeadline:   time.Second,
-		RetryPeriod:     200 * time.Millisecond,
+		LeaseName:        "app",
+		Identity:         name, // 显式身份：默认 hostname 会让同进程双 elector 互认
+		LeaseDuration:    2 * time.Second,
+		RenewDeadline:    time.Second,
+		RetryPeriod:      200 * time.Millisecond,
 		OnStartedLeading: func(_ context.Context) { started() },
 		OnStoppedLeading: stopped,
 	})
@@ -99,9 +99,9 @@ func TestConfigValidation(t *testing.T) {
 		t.Fatal("missing OnStartedLeading should fail")
 	}
 	if _, err := New(client, Config{
-		LeaseName:       "app",
-		LeaseDuration:   time.Second,
-		RenewDeadline:   2 * time.Second, // 违反 renew < lease
+		LeaseName:        "app",
+		LeaseDuration:    time.Second,
+		RenewDeadline:    2 * time.Second, // 违反 renew < lease
 		OnStartedLeading: func(context.Context) {},
 	}); err == nil {
 		t.Fatal("renewDeadline >= leaseDuration should fail")
