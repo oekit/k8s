@@ -40,12 +40,10 @@ type Config struct {
 	InsecureSkipTLSVerify bool `yaml:"insecureSkipTLSVerify"`
 }
 
-// InCluster 判断当前进程是否运行在集群内（POD 环境注入了
+// InCluster 判断当前进程是否运行在集群内（POD 环境注入了非空的
 // KUBERNETES_SERVICE_HOST/PORT）。
 func InCluster() bool {
-	_, host := os.LookupEnv("KUBERNETES_SERVICE_HOST")
-	_, port := os.LookupEnv("KUBERNETES_SERVICE_PORT")
-	return host && port
+	return os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != ""
 }
 
 // RESTConfig 按配置解析出 *rest.Config（连接参数已应用）。
@@ -98,7 +96,6 @@ func RESTConfig(cfg Config) (*rest.Config, error) {
 	rc.UserAgent = ua
 	if cfg.InsecureSkipTLSVerify {
 		rc.Insecure = true
-		rc.TLSClientConfig.Insecure = true
 	}
 	return rc, nil
 }

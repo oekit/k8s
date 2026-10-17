@@ -16,6 +16,7 @@ func startElector(t *testing.T, client *fake.Clientset, name string,
 	done := make(chan struct{})
 	le, err := New(client, Config{
 		LeaseName:       "app",
+		Identity:        name, // 显式身份：默认 hostname 会让同进程双 elector 互认
 		LeaseDuration:   2 * time.Second,
 		RenewDeadline:   time.Second,
 		RetryPeriod:     200 * time.Millisecond,
@@ -71,16 +72,22 @@ func TestLeadershipHandoff(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// e1 退场后 e2 应接棒
+	// e1 退场后租约到期（2s），e2 应接棒；此后无竞争者，e2 持续持有不会失权
 	cancel1()
 	<-done1
 	waitCond(t, 15*time.Second, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return led2 && stopped2
+		return led2
 	})
 	cancel2()
 	<-done2
+	// Run 因 ctx 取消退出时应触发失权回调
+	waitCond(t, 2*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return stopped2
+	})
 }
 
 func TestConfigValidation(t *testing.T) {
