@@ -2,7 +2,9 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [- fix(deps): logx 地板 v0.5.0 → v0.6.0（零代码改动）
+## [v0.1.2] — 2026-10-17
+
+- fix(deps): logx 地板 v0.5.0 → v0.6.0（零代码改动）
 
 ## [v0.1.1] — 2026-10-17
 
