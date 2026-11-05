@@ -2,6 +2,10 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.1.6] — 2026-11-06
+
+- build: 矩阵依赖地板对齐（维护轮 #233）
+
 ## [v0.1.4] — 2026-10-23
 
 - build: 矩阵内依赖地板对齐（align_floors 不动点）：logx v0.7.0 → v0.7.1（#23）
