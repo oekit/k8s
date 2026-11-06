@@ -2,6 +2,10 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.1.7] — 2026-11-06
+
+- build: 矩阵依赖地板对齐（第二轮发版后置）
+
 ## [v0.1.6] — 2026-11-06
 
 - build: 矩阵依赖地板对齐（维护轮 #233）
