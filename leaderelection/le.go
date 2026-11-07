@@ -10,7 +10,7 @@
 //	err := leaderelection.Run(ctx, cs, leaderelection.Config{
 //	    LeaseName: "my-app",
 //	    OnStartedLeading: func(ctx context.Context) {
-//	        // 当选：在这里跑单活逻辑；ctx 在失去领导权时被取消
+//	        // 当选：阻塞跑单活逻辑，直至 ctx 在失去领导权时被取消
 //	        serve(ctx)
 //	    },
 //	    OnStoppedLeading: func() {
@@ -63,8 +63,9 @@ type Config struct {
 	// RetryPeriod 是重试间隔（默认 2s；client-go 协议要求显著小于
 	// RenewDeadline，否则续约窗口内只有一次重试机会）。
 	RetryPeriod time.Duration
-	// OnStartedLeading 必填：当选回调；其入参 ctx 在失去领导权时被取消，
-	// 长驻逻辑必须监听该 ctx（非阻塞回调，返回即认为启动完成）。
+	// OnStartedLeading 必填：当选回调，在独立 goroutine 中运行，应阻塞至
+	// 其入参 ctx 取消（ctx 在失去领导权时被取消）；快速返回不会结束选主，
+	// 只会留下空转的续约循环，单活职责随即失效。
 	OnStartedLeading func(ctx context.Context)
 	// OnStoppedLeading 必填：失去领导权回调（典型：log.Fatal 退出交由重启）。
 	// client-go 的 LeaderElector 要求该回调非 nil，缺失会导致构造失败。
