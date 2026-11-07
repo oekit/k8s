@@ -64,7 +64,8 @@ type Config struct {
 	// OnStartedLeading 必填：当选回调；其入参 ctx 在失去领导权时被取消，
 	// 长驻逻辑必须监听该 ctx（非阻塞回调，返回即认为启动完成）。
 	OnStartedLeading func(ctx context.Context)
-	// OnStoppedLeading 失去领导权回调（必填建议：log.Fatal 退出交由重启）。
+	// OnStoppedLeading 必填：失去领导权回调（典型：log.Fatal 退出交由重启）。
+	// client-go 的 LeaderElector 要求该回调非 nil，缺失会导致构造失败。
 	OnStoppedLeading func()
 	// OnNewLeader 新leader产生回调（含自己当选；identity 为新 leader 标识）。
 	OnNewLeader func(identity string)
@@ -79,7 +80,7 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 		return nil, fmt.Errorf("k8s leaderelection: OnStartedLeading is required")
 	}
 	if cfg.OnStoppedLeading == nil {
-		log.Warn("OnStoppedLeading not set; lost leadership will be silent")
+		return nil, fmt.Errorf("k8s leaderelection: OnStoppedLeading is required")
 	}
 	ns := cfg.Namespace
 	if ns == "" {
@@ -149,10 +150,6 @@ func Run(ctx context.Context, client kubernetes.Interface, cfg Config) error {
 	le, err := New(client, cfg)
 	if err != nil {
 		return err
-	}
-	if cfg.OnStoppedLeading == nil {
-		// 没有失权回调时，Run 返回即退出，调用方必须处理返回值
-		defer log.Info("leadership run finished", "lease", cfg.LeaseName)
 	}
 	le.Run(ctx)
 	return nil

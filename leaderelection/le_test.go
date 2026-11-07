@@ -100,9 +100,16 @@ func TestConfigValidation(t *testing.T) {
 	}
 	if _, err := New(client, Config{
 		LeaseName:        "app",
+		OnStartedLeading: func(context.Context) {},
+	}); err == nil {
+		t.Fatal("missing OnStoppedLeading should fail")
+	}
+	if _, err := New(client, Config{
+		LeaseName:        "app",
 		LeaseDuration:    time.Second,
 		RenewDeadline:    2 * time.Second, // 违反 renew < lease
 		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
 	}); err == nil {
 		t.Fatal("renewDeadline >= leaseDuration should fail")
 	}
@@ -112,6 +119,7 @@ func TestConfigValidation(t *testing.T) {
 		RenewDeadline:    5 * time.Second,
 		RetryPeriod:      5 * time.Second, // 违反 retry < renew
 		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
 	}); err == nil {
 		t.Fatal("retryPeriod >= renewDeadline should fail")
 	}
@@ -121,6 +129,7 @@ func TestConfigValidation(t *testing.T) {
 		RenewDeadline:    6 * time.Second,
 		RetryPeriod:      5 * time.Second, // renew == retry*1.2，无裕度也拒绝
 		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
 	}); err == nil {
 		t.Fatal("renewDeadline <= retryPeriod*1.2 should fail")
 	}
@@ -130,6 +139,7 @@ func TestConfigValidation(t *testing.T) {
 		RenewDeadline:    9 * time.Second,
 		RetryPeriod:      8 * time.Second, // 8s*1.2=9.6s > 9s
 		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
 	}); err == nil {
 		t.Fatal("renewDeadline < retryPeriod*1.2 should fail")
 	}
