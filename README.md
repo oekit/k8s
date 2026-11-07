@@ -25,7 +25,7 @@ go get github.com/oekit/k8s@v0.1.6
 | 包 | import 路径 | 做什么 |
 |---|---|---|
 | `k8s`（模块根包） | `github.com/oekit/k8s` | `RESTConfig`（解析顺序：显式 KubeconfigPath → in-cluster → KUBECONFIG → ~/.kube/config；QPS/Burst 默认 50/100、UserAgent 默认 oekit-k8s）、`NewClientset`、`NewDynamicClient`（CRD/GVR）、`InCluster()` 环境探测 |
-| `leaderelection` | `github.com/oekit/k8s/leaderelection` | Lease 选主简化封装：`New`/`Run`（阻塞当选）+ `OnStartedLeading`/`OnStoppedLeading`/`OnNewLeader` 回调；Namespace 默认 POD_NAMESPACE → default；仅要求 Lease get/create/update 权限 |
+| `leaderelection` | `github.com/oekit/k8s/leaderelection` | Lease 选主简化封装：`New`/`Run`（阻塞当选，退出原因上抛：ctx 取消返回 `ctx.Err()`，失权返回 `ErrLostLeadership`）+ `OnStartedLeading`/`OnStoppedLeading`/`OnNewLeader` 回调；Namespace 默认 POD_NAMESPACE → default；仅要求 Lease get/create/update 权限 |
 
 ## 快速使用
 
@@ -45,6 +45,7 @@ err = leaderelection.Run(ctx, cs, leaderelection.Config{
     OnStartedLeading: func(ctx context.Context) { serve(ctx) },
     OnStoppedLeading: func() { log.Fatal("lost leadership") },
 })
+// Run 返回即退出：ctx 取消返回 ctx.Err()，失权返回 ErrLostLeadership
 ```
 
 ### 客户端限流

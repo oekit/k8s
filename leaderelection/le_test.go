@@ -2,11 +2,15 @@ package leaderelection
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 func startElector(t *testing.T, client *fake.Clientset, name string,
@@ -90,6 +94,76 @@ func TestLeadershipHandoff(t *testing.T) {
 	})
 }
 
+// Run 因调用方取消 ctx 退出时，退出原因应上抛为 ctx.Err()（#42）。
+func TestRunReturnsContextCanceled(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		done <- Run(ctx, client, Config{
+			LeaseName:        "app",
+			Identity:         "e1",
+			LeaseDuration:    2 * time.Second,
+			RenewDeadline:    time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			OnStartedLeading: func(context.Context) { close(started) },
+			OnStoppedLeading: func() {},
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("not elected in time")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after ctx cancel")
+	}
+}
+
+// Run 因失权退出时，退出原因应上抛为 ErrLostLeadership（#42）：
+// 当选后令所有 Lease update 失败，续约窗口内重试耗尽即放弃领导权。
+func TestRunReturnsErrLostLeadership(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	var failRenew atomic.Bool
+	client.PrependReactor("update", "leases",
+		func(_ clienttesting.Action) (bool, runtime.Object, error) {
+			if failRenew.Load() {
+				return true, nil, errors.New("lease update boom")
+			}
+			return false, nil, nil
+		})
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		done <- Run(ctx, client, Config{
+			LeaseName:        "app",
+			Identity:         "e1",
+			LeaseDuration:    2 * time.Second,
+			RenewDeadline:    time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			OnStartedLeading: func(context.Context) { failRenew.Store(true) },
+			OnStoppedLeading: func() {},
+		})
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrLostLeadership) {
+			t.Fatalf("Run() = %v, want ErrLostLeadership", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run did not return after leadership loss")
+	}
+}
+
 func TestConfigValidation(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	if _, err := New(client, Config{}); err == nil {
@@ -100,9 +174,16 @@ func TestConfigValidation(t *testing.T) {
 	}
 	if _, err := New(client, Config{
 		LeaseName:        "app",
+		OnStartedLeading: func(context.Context) {},
+	}); err == nil {
+		t.Fatal("missing OnStoppedLeading should fail")
+	}
+	if _, err := New(client, Config{
+		LeaseName:        "app",
 		LeaseDuration:    time.Second,
 		RenewDeadline:    2 * time.Second, // 违反 renew < lease
 		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
 	}); err == nil {
 		t.Fatal("renewDeadline >= leaseDuration should fail")
 	}
@@ -112,6 +193,7 @@ func TestConfigValidation(t *testing.T) {
 		RenewDeadline:    5 * time.Second,
 		RetryPeriod:      5 * time.Second, // 违反 retry < renew
 		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
 	}); err == nil {
 		t.Fatal("retryPeriod >= renewDeadline should fail")
 	}
@@ -121,6 +203,7 @@ func TestConfigValidation(t *testing.T) {
 		RenewDeadline:    6 * time.Second,
 		RetryPeriod:      5 * time.Second, // renew == retry*1.2，无裕度也拒绝
 		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
 	}); err == nil {
 		t.Fatal("renewDeadline <= retryPeriod*1.2 should fail")
 	}
@@ -130,6 +213,7 @@ func TestConfigValidation(t *testing.T) {
 		RenewDeadline:    9 * time.Second,
 		RetryPeriod:      8 * time.Second, // 8s*1.2=9.6s > 9s
 		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
 	}); err == nil {
 		t.Fatal("renewDeadline < retryPeriod*1.2 should fail")
 	}

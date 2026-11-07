@@ -10,13 +10,14 @@
 //	err := leaderelection.Run(ctx, cs, leaderelection.Config{
 //	    LeaseName: "my-app",
 //	    OnStartedLeading: func(ctx context.Context) {
-//	        // 当选：在这里跑单活逻辑；ctx 在失去领导权时被取消
+//	        // 当选：阻塞跑单活逻辑，直至 ctx 在失去领导权时被取消
 //	        serve(ctx)
 //	    },
 //	    OnStoppedLeading: func() {
 //	        log.Fatal("lost leadership, exiting for restart") // 典型：直接退出交由重启
 //	    },
 //	})
+//	// Run 返回即退出：ctx 取消返回 ctx.Err()，失权返回 ErrLostLeadership
 //
 // Namespace 默认取 POD_NAMESPACE 环境变量，再回退 "default"；
 // Identity 默认取 hostname。
@@ -24,6 +25,7 @@ package leaderelection
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -61,10 +63,12 @@ type Config struct {
 	// RetryPeriod 是重试间隔（默认 2s；client-go 协议要求显著小于
 	// RenewDeadline，否则续约窗口内只有一次重试机会）。
 	RetryPeriod time.Duration
-	// OnStartedLeading 必填：当选回调；其入参 ctx 在失去领导权时被取消，
-	// 长驻逻辑必须监听该 ctx（非阻塞回调，返回即认为启动完成）。
+	// OnStartedLeading 必填：当选回调，在独立 goroutine 中运行，应阻塞至
+	// 其入参 ctx 取消（ctx 在失去领导权时被取消）；快速返回不会结束选主，
+	// 只会留下空转的续约循环，单活职责随即失效。
 	OnStartedLeading func(ctx context.Context)
-	// OnStoppedLeading 失去领导权回调（必填建议：log.Fatal 退出交由重启）。
+	// OnStoppedLeading 必填：失去领导权回调（典型：log.Fatal 退出交由重启）。
+	// client-go 的 LeaderElector 要求该回调非 nil，缺失会导致构造失败。
 	OnStoppedLeading func()
 	// OnNewLeader 新leader产生回调（含自己当选；identity 为新 leader 标识）。
 	OnNewLeader func(identity string)
@@ -79,7 +83,7 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 		return nil, fmt.Errorf("k8s leaderelection: OnStartedLeading is required")
 	}
 	if cfg.OnStoppedLeading == nil {
-		log.Warn("OnStoppedLeading not set; lost leadership will be silent")
+		return nil, fmt.Errorf("k8s leaderelection: OnStoppedLeading is required")
 	}
 	ns := cfg.Namespace
 	if ns == "" {
@@ -143,17 +147,25 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 	return le, nil
 }
 
-// Run 参与选主并阻塞：当选后 OnStartedLeading 运行；失去领导权或 ctx 取消
-// 时返回。Run 内部已管理 goroutine，禁止裸并发调用同一 elector。
+// ErrLostLeadership 表示 elector 因失去领导权（续约窗口内续约失败）而退出。
+// 失权意味着本副本已不适合继续单活职责，典型处理是进程退出交由重启，
+// 而非把该错误当成功吞掉。
+var ErrLostLeadership = errors.New("k8s leaderelection: lost leadership")
+
+// Run 参与选主并阻塞：当选后 OnStartedLeading 在独立 goroutine 中运行；
+// 失去领导权或 ctx 取消时返回，退出原因通过返回值上抛——ctx 取消返回
+// ctx.Err()，失权退出（续约失败放弃领导权）返回 ErrLostLeadership。
+// OnStoppedLeading 先于返回触发。Run 内部已管理 goroutine，禁止裸并发
+// 调用同一 elector。
 func Run(ctx context.Context, client kubernetes.Interface, cfg Config) error {
 	le, err := New(client, cfg)
 	if err != nil {
 		return err
 	}
-	if cfg.OnStoppedLeading == nil {
-		// 没有失权回调时，Run 返回即退出，调用方必须处理返回值
-		defer log.Info("leadership run finished", "lease", cfg.LeaseName)
-	}
 	le.Run(ctx)
-	return nil
+	// ctx 已取消（调用方主动关停）优先按取消原因返回；否则为失权退出。
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrLostLeadership
 }
