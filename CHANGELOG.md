@@ -2,6 +2,15 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.1.8] — 2026-11-07
+
+- fix(leaderelection): New 补校验 retryPeriod < renewDeadline×1.2（#39）
+- fix(leaderelection): OnStoppedLeading 必填——nil 返回参数错误，文档同步（#41）
+- fix(leaderelection): Run 上抛失权/取消原因——新增 ErrLostLeadership 哨兵，不再恒 nil（#42）
+- docs(leaderelection): OnStartedLeading「阻塞回调」语义修正——独立 goroutine 中阻塞至 ctx 取消（#43）
+
+关联问题单：k8s#39、k8s#41、k8s#42、k8s#43。
+
 ## [v0.1.7] — 2026-11-06
 
 - build: 矩阵依赖地板对齐（第二轮发版后置）
