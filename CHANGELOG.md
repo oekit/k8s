@@ -2,6 +2,10 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.1.9] — 2026-11-07
+
+- build: 依赖地板对齐 concurrency v0.28.1（+registry nacos v0.1.9 嵌套）
+
 ## [v0.1.8] — 2026-11-07
 
 - fix(leaderelection): New 补校验 retryPeriod < renewDeadline×1.2（#39）
