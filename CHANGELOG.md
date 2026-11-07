@@ -2,6 +2,10 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.1.10] — 2026-11-08
+
+- build: 依赖地板对齐——本版把 oekit 依赖地板抬到各依赖当前最新已发布版本（matrix-tools/scripts/align_floors.py 维护轮）
+
 ## [v0.1.9] — 2026-11-07
 
 - build: 依赖地板对齐 concurrency v0.28.1（+registry nacos v0.1.9 嵌套）
