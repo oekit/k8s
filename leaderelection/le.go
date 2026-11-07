@@ -55,9 +55,11 @@ type Config struct {
 	Identity string
 	// LeaseDuration 是租约时长（默认 15s，须大于 RenewDeadline）。
 	LeaseDuration time.Duration
-	// RenewDeadline 是续约窗口（默认 10s；窗口内续约失败即放弃领导权）。
+	// RenewDeadline 是续约窗口（默认 10s；窗口内续约失败即放弃领导权，
+	// 须满足 > RetryPeriod*1.2，见 New 的校验）。
 	RenewDeadline time.Duration
-	// RetryPeriod 是重试间隔（默认 2s）。
+	// RetryPeriod 是重试间隔（默认 2s；client-go 协议要求显著小于
+	// RenewDeadline，否则续约窗口内只有一次重试机会）。
 	RetryPeriod time.Duration
 	// OnStartedLeading 必填：当选回调；其入参 ctx 在失去领导权时被取消，
 	// 长驻逻辑必须监听该 ctx（非阻塞回调，返回即认为启动完成）。
@@ -107,6 +109,13 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 	if renewDeadline >= leaseDuration {
 		return nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be < leaseDuration (%s)",
 			renewDeadline, leaseDuration)
+	}
+	// retryPeriod 须显著小于 renewDeadline（client-go 建议留 1.2 倍抖动裕度）：
+	// 否则续约窗口内仅一次重试机会，网络抖动一次就放弃领导权。
+	// retryPeriod*6/5 即 retryPeriod*1.2（整数运算，避免浮点转换）。
+	if minRenew := retryPeriod * 6 / 5; renewDeadline <= minRenew {
+		return nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be > retryPeriod (%s) * 1.2",
+			renewDeadline, retryPeriod)
 	}
 
 	lock := &resourcelock.LeaseLock{

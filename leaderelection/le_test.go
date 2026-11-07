@@ -106,4 +106,39 @@ func TestConfigValidation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("renewDeadline >= leaseDuration should fail")
 	}
+	if _, err := New(client, Config{
+		LeaseName:        "app",
+		LeaseDuration:    15 * time.Second,
+		RenewDeadline:    5 * time.Second,
+		RetryPeriod:      5 * time.Second, // 违反 retry < renew
+		OnStartedLeading: func(context.Context) {},
+	}); err == nil {
+		t.Fatal("retryPeriod >= renewDeadline should fail")
+	}
+	if _, err := New(client, Config{
+		LeaseName:        "app",
+		LeaseDuration:    15 * time.Second,
+		RenewDeadline:    6 * time.Second,
+		RetryPeriod:      5 * time.Second, // renew == retry*1.2，无裕度也拒绝
+		OnStartedLeading: func(context.Context) {},
+	}); err == nil {
+		t.Fatal("renewDeadline <= retryPeriod*1.2 should fail")
+	}
+	if _, err := New(client, Config{
+		LeaseName:        "app",
+		LeaseDuration:    15 * time.Second,
+		RenewDeadline:    9 * time.Second,
+		RetryPeriod:      8 * time.Second, // 8s*1.2=9.6s > 9s
+		OnStartedLeading: func(context.Context) {},
+	}); err == nil {
+		t.Fatal("renewDeadline < retryPeriod*1.2 should fail")
+	}
+	// 全零走默认值（15s/10s/2s），满足全部约束
+	if _, err := New(client, Config{
+		LeaseName:        "app",
+		OnStartedLeading: func(context.Context) {},
+		OnStoppedLeading: func() {},
+	}); err != nil {
+		t.Fatalf("default durations should pass: %v", err)
+	}
 }
