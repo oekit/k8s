@@ -20,4 +20,5 @@
 //	    OnStartedLeading: func(ctx context.Context) { serve(ctx) },
 //	    OnStoppedLeading: func() { log.Fatal("lost leadership") },
 //	})
+//	// Run 返回即退出：ctx 取消返回 ctx.Err()，失权返回 ErrLostLeadership
 package k8s

@@ -2,11 +2,15 @@ package leaderelection
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 func startElector(t *testing.T, client *fake.Clientset, name string,
@@ -88,6 +92,76 @@ func TestLeadershipHandoff(t *testing.T) {
 		defer mu.Unlock()
 		return stopped2
 	})
+}
+
+// Run 因调用方取消 ctx 退出时，退出原因应上抛为 ctx.Err()（#42）。
+func TestRunReturnsContextCanceled(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		done <- Run(ctx, client, Config{
+			LeaseName:        "app",
+			Identity:         "e1",
+			LeaseDuration:    2 * time.Second,
+			RenewDeadline:    time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			OnStartedLeading: func(context.Context) { close(started) },
+			OnStoppedLeading: func() {},
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("not elected in time")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after ctx cancel")
+	}
+}
+
+// Run 因失权退出时，退出原因应上抛为 ErrLostLeadership（#42）：
+// 当选后令所有 Lease update 失败，续约窗口内重试耗尽即放弃领导权。
+func TestRunReturnsErrLostLeadership(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	var failRenew atomic.Bool
+	client.PrependReactor("update", "leases",
+		func(_ clienttesting.Action) (bool, runtime.Object, error) {
+			if failRenew.Load() {
+				return true, nil, errors.New("lease update boom")
+			}
+			return false, nil, nil
+		})
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		done <- Run(ctx, client, Config{
+			LeaseName:        "app",
+			Identity:         "e1",
+			LeaseDuration:    2 * time.Second,
+			RenewDeadline:    time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			OnStartedLeading: func(context.Context) { failRenew.Store(true) },
+			OnStoppedLeading: func() {},
+		})
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrLostLeadership) {
+			t.Fatalf("Run() = %v, want ErrLostLeadership", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run did not return after leadership loss")
+	}
 }
 
 func TestConfigValidation(t *testing.T) {

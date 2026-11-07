@@ -17,6 +17,7 @@
 //	        log.Fatal("lost leadership, exiting for restart") // 典型：直接退出交由重启
 //	    },
 //	})
+//	// Run 返回即退出：ctx 取消返回 ctx.Err()，失权返回 ErrLostLeadership
 //
 // Namespace 默认取 POD_NAMESPACE 环境变量，再回退 "default"；
 // Identity 默认取 hostname。
@@ -24,6 +25,7 @@ package leaderelection
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -144,13 +146,25 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 	return le, nil
 }
 
-// Run 参与选主并阻塞：当选后 OnStartedLeading 运行；失去领导权或 ctx 取消
-// 时返回。Run 内部已管理 goroutine，禁止裸并发调用同一 elector。
+// ErrLostLeadership 表示 elector 因失去领导权（续约窗口内续约失败）而退出。
+// 失权意味着本副本已不适合继续单活职责，典型处理是进程退出交由重启，
+// 而非把该错误当成功吞掉。
+var ErrLostLeadership = errors.New("k8s leaderelection: lost leadership")
+
+// Run 参与选主并阻塞：当选后 OnStartedLeading 在独立 goroutine 中运行；
+// 失去领导权或 ctx 取消时返回，退出原因通过返回值上抛——ctx 取消返回
+// ctx.Err()，失权退出（续约失败放弃领导权）返回 ErrLostLeadership。
+// OnStoppedLeading 先于返回触发。Run 内部已管理 goroutine，禁止裸并发
+// 调用同一 elector。
 func Run(ctx context.Context, client kubernetes.Interface, cfg Config) error {
 	le, err := New(client, cfg)
 	if err != nil {
 		return err
 	}
 	le.Run(ctx)
-	return nil
+	// ctx 已取消（调用方主动关停）优先按取消原因返回；否则为失权退出。
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrLostLeadership
 }
