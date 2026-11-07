@@ -3,7 +3,7 @@ module github.com/oekit/k8s
 go 1.26.0
 
 require (
-	github.com/oekit/logx v0.8.7
+	github.com/oekit/logx v0.8.8
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
 )
