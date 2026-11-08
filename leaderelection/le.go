@@ -21,6 +21,9 @@
 //
 // Namespace 默认取 POD_NAMESPACE 环境变量，再回退 "default"；
 // Identity 默认取 hostname。
+//
+// Run 返回后应尽快退出进程，不要复用同一进程以同一 Identity 再入选举
+// （重新参与选主在语义上等同于未退出，等于主动放弃提前释放的价值）。
 package leaderelection
 
 import (
@@ -72,6 +75,21 @@ type Config struct {
 	OnStoppedLeading func()
 	// OnNewLeader 新leader产生回调（含自己当选；identity 为新 leader 标识）。
 	OnNewLeader func(identity string)
+	// ReleaseOnCancel 控制 ctx 取消（优雅关停）时是否立即释放 Lease
+	// （透传 client-go LeaderElectionConfig.ReleaseOnCancel，默认 false
+	// 保持既有行为）。
+	//
+	// false（默认）：关停不释放 Lease，继任者须等租约自然过期才能接管——
+	// 按 LeaseDuration 缺省 15s 计，每次滚动发布/缩容最长 15s 无人单活。
+	//
+	// true：ctx 取消后立即清空 Lease 的 holderIdentity，继任者在 RetryPeriod
+	// 量级内即可接管（从释放到继任者当选仍有一小段选主空窗，但不再是
+	// 15s 量级）。
+	//
+	// 启用前提（client-go 明示的安全约束）：取消 ctx 前必须保证受 Lease
+	// 保护的单活逻辑已经完成/排空——释放后继任者可立刻当选，若本副本
+	// 仍有在飞单活逻辑，会出现两个副本同时执行关键路径。
+	ReleaseOnCancel bool
 }
 
 // New 创建 LeaderElector（不阻塞；调用方持有并自行 Run）。
@@ -139,6 +157,7 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 			OnStoppedLeading: cfg.OnStoppedLeading,
 			OnNewLeader:      cfg.OnNewLeader,
 		},
+		ReleaseOnCancel: cfg.ReleaseOnCancel,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("k8s leaderelection: new elector: %w", err)

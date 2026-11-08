@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -224,5 +226,146 @@ func TestConfigValidation(t *testing.T) {
 		OnStoppedLeading: func() {},
 	}); err != nil {
 		t.Fatalf("default durations should pass: %v", err)
+	}
+}
+
+// electThenCancel 当选后取消 ctx（优雅关停），返回 Run 返回后的 Lease，
+// 供断言关停时 Lease 的释放行为（#62）。
+func electThenCancel(t *testing.T, client *fake.Clientset, releaseOnCancel bool) *coordinationv1.Lease {
+	t.Helper()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		done <- Run(ctx, client, Config{
+			LeaseName:       "app",
+			Identity:        "e1",
+			LeaseDuration:   2 * time.Second,
+			RenewDeadline:   time.Second,
+			RetryPeriod:     200 * time.Millisecond,
+			ReleaseOnCancel: releaseOnCancel,
+			OnStartedLeading: func(context.Context) {
+				close(started)
+			},
+			OnStoppedLeading: func() {},
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("not elected in time")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after ctx cancel")
+	}
+	lease, err := client.CoordinationV1().Leases("default").
+		Get(context.Background(), "app", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get lease after shutdown: %v", err)
+	}
+	return lease
+}
+
+// #62：ReleaseOnCancel: true 时优雅关停（ctx 取消）应立即释放 Lease——
+// holderIdentity 清空，继任者无需等租约自然过期。
+func TestReleaseOnCancelClearsLeaseHolder(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	lease := electThenCancel(t, client, true)
+	if lease.Spec.HolderIdentity != nil && *lease.Spec.HolderIdentity != "" {
+		t.Fatalf("holderIdentity = %q, want cleared with ReleaseOnCancel", *lease.Spec.HolderIdentity)
+	}
+}
+
+// #62 负对照：缺省（false）保持既有行为——关停不释放 Lease，
+// holderIdentity 仍为本副本，继任者须等租约自然过期（最长 LeaseDuration）。
+func TestNoReleaseOnCancelKeepsLeaseHolder(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	lease := electThenCancel(t, client, false)
+	if lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != "e1" {
+		t.Fatalf("holderIdentity = %v, want %q kept by default (no release on cancel)", lease.Spec.HolderIdentity, "e1")
+	}
+}
+
+// #62：ReleaseOnCancel 生效后继任者应在 RetryPeriod 量级内接管（而非等
+// LeaseDuration 自然过期）——「关停空窗从 15s 量级缩到重试间隔」的直接判据。
+// 故意放大 LeaseDuration 到 10s：若释放未生效，e2 在测试窗口内不可能当选。
+func TestReleaseOnCancelSpeedsTakeover(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	started1 := make(chan struct{})
+	done1 := make(chan error, 1)
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	go func() {
+		done1 <- Run(ctx1, client, Config{
+			LeaseName:        "app",
+			Identity:         "e1",
+			LeaseDuration:    10 * time.Second,
+			RenewDeadline:    2 * time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			ReleaseOnCancel:  true,
+			OnStartedLeading: func(context.Context) { close(started1) },
+			OnStoppedLeading: func() {},
+		})
+	}()
+	select {
+	case <-started1:
+	case <-time.After(10 * time.Second):
+		t.Fatal("e1 not elected in time")
+	}
+
+	started2 := make(chan struct{})
+	done2 := make(chan error, 1)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	go func() {
+		done2 <- Run(ctx2, client, Config{
+			LeaseName:        "app",
+			Identity:         "e2",
+			LeaseDuration:    10 * time.Second,
+			RenewDeadline:    2 * time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			OnStartedLeading: func(context.Context) { close(started2) },
+			OnStoppedLeading: func() {},
+		})
+	}()
+	// e1 持有期间 e2 不得当选
+	time.Sleep(1 * time.Second)
+	select {
+	case <-started2:
+		t.Fatal("e2 became leader while e1 holds the lease")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel1() // e1 优雅关停并释放 Lease
+	select {
+	case err := <-done1:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run(e1) = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run(e1) did not return after ctx cancel")
+	}
+
+	// 释放后 e2 应在 RetryPeriod 量级内接管（远小于 10s 的 LeaseDuration）
+	select {
+	case <-started2:
+	case <-time.After(3 * time.Second):
+		t.Fatal("e2 did not take over within RetryPeriod scale after release")
+	}
+	cancel2()
+	select {
+	case err := <-done2:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run(e2) = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run(e2) did not return after ctx cancel")
 	}
 }
