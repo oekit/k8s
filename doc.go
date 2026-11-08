@@ -18,7 +18,12 @@
 //	err := k8s.leaderelection.Run(ctx, cs, k8s.leaderelection.Config{
 //	    LeaseName: "my-app",
 //	    OnStartedLeading: func(ctx context.Context) { serve(ctx) },
-//	    OnStoppedLeading: func() { log.Fatal("lost leadership") },
+//	    OnStoppedLeading: func() {}, // client-go 要求非 nil；退出原因用 Run 返回值区分
 //	})
-//	// Run 返回即退出：ctx 取消返回 ctx.Err()，失权返回 ErrLostLeadership
+//	// 失权（续约失败放弃领导权）返回 ErrLostLeadership——此时才退出交由重启；
+//	// ctx 取消返回 ctx.Err()——优雅关停（含从未当选的副本），正常退出即可，
+//	// 勿无条件 log.Fatal（否则每次发布/缩容所有副本都非零退出）
+//	if errors.Is(err, k8s.leaderelection.ErrLostLeadership) {
+//	    log.Fatal("lost leadership, exiting for restart")
+//	}
 package k8s

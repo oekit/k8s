@@ -25,7 +25,7 @@ go get github.com/oekit/k8s@v0.1.10
 | 包 | import 路径 | 做什么 |
 |---|---|---|
 | `k8s`（模块根包） | `github.com/oekit/k8s` | `RESTConfig`（解析顺序：显式 KubeconfigPath → in-cluster → KUBECONFIG → ~/.kube/config；QPS/Burst 默认 50/100、UserAgent 默认 oekit-k8s）、`NewClientset`、`NewDynamicClient`（CRD/GVR）、`InCluster()` 环境探测 |
-| `leaderelection` | `github.com/oekit/k8s/leaderelection` | Lease 选主简化封装：`New`/`Run`（阻塞当选，退出原因上抛：ctx 取消返回 `ctx.Err()`，失权返回 `ErrLostLeadership`）+ `OnStartedLeading`/`OnStoppedLeading`/`OnNewLeader` 回调；Namespace 默认 POD_NAMESPACE → default；仅要求 Lease get/create/update 权限 |
+| `leaderelection` | `github.com/oekit/k8s/leaderelection` | Lease 选主简化封装：`New`/`Run`（阻塞当选，退出原因上抛：ctx 取消返回 `ctx.Err()`，失权返回 `ErrLostLeadership`）+ `OnStartedLeading`/`OnStoppedLeading`/`OnNewLeader` 回调（`OnStoppedLeading` 是 elector 退出回调，client-go 无条件触发、不区分失权/关停——判断失权用 `Run` 返回值）；`Config.ReleaseOnCancel` 优雅关停立即释放 Lease（默认 false：继任者等租约自然过期，最长 15s 空窗）；Namespace 默认 POD_NAMESPACE → default；仅要求 Lease get/create/update 权限 |
 
 ## 快速使用
 
@@ -39,14 +39,37 @@ import (
 cs, err := k8s.NewClientset(k8s.Config{})
 pods, _ := cs.CoreV1().Pods("default").List(ctx, metav1.ListOptions{})
 
-// 主备单活：只有 leader 跑业务，失权即退出交由重启
+// 主备单活：只有 leader 跑业务；失权（Run 返回 ErrLostLeadership）才退出交由重启，
+// ctx 取消（优雅关停，含从未当选的副本）正常退出——勿在 OnStoppedLeading 里
+// 无条件 log.Fatal，否则每次发布/缩容所有副本都非零退出，淹没真实失权告警
 err = leaderelection.Run(ctx, cs, leaderelection.Config{
     LeaseName: "my-app",
     OnStartedLeading: func(ctx context.Context) { serve(ctx) },
-    OnStoppedLeading: func() { log.Fatal("lost leadership") },
+    OnStoppedLeading: func() {}, // client-go 要求非 nil；退出原因用 Run 返回值区分
 })
-// Run 返回即退出：ctx 取消返回 ctx.Err()，失权返回 ErrLostLeadership
+if errors.Is(err, leaderelection.ErrLostLeadership) {
+    log.Fatal("lost leadership, exiting for restart")
+}
 ```
+
+### 关停语义与 ReleaseOnCancel
+
+`OnStoppedLeading` 是 **elector 退出回调**而非「失权回调」：client-go 在
+elector 退出时无条件触发——失去领导权、ctx 取消优雅关停、乃至从未当选
+就退出（多副本部署里非 leader 副本占多数）都会调用。是否失权以 `Run`
+的返回值为准：`ErrLostLeadership` = 失权（典型处理：退出交由重启）；
+`ctx.Err()` = 优雅关停（正常退出即可）。
+
+默认（`ReleaseOnCancel: false`）优雅关停**不释放** Lease，继任者须等租约
+自然过期——按缺省 `LeaseDuration` 15s 计，每次滚动发布/缩容最长 15s 无人
+单活。`Config{ReleaseOnCancel: true}` 在 ctx 取消后立即清空 Lease，继任者
+在 `RetryPeriod` 量级内接管（从释放到继任者当选仍有一小段选主空窗，但不
+再是 15s 量级）。启用前提（client-go 明示的安全约束）：取消 ctx 前必须
+保证受 Lease 保护的单活逻辑已完成/排空——释放后继任者可立刻当选，否则
+会出现两个副本同时执行关键路径。
+
+`Run` 返回后应尽快退出进程，不要复用同一进程以同一 Identity 再入选举
+（重新参与在语义上等同于未退出）。
 
 ### 客户端限流
 
