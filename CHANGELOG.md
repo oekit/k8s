@@ -2,6 +2,13 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.2.0] — 2026-11-09
+
+- feat(leaderelection): 暴露 ReleaseOnCancel——优雅关停立即释放 Lease（#62）
+- docs(leaderelection): OnStoppedLeading 语义修正——优雅关停/从未当选不再 log.Fatal（#61）
+
+关联问题单：k8s#61、k8s#62。
+
 ## [v0.1.10] — 2026-11-08
 
 - build: 依赖地板对齐——本版把 oekit 依赖地板抬到各依赖当前最新已发布版本（matrix-tools/scripts/align_floors.py 维护轮）
