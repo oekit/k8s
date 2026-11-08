@@ -13,11 +13,16 @@
 //	        // 当选：阻塞跑单活逻辑，直至 ctx 在失去领导权时被取消
 //	        serve(ctx)
 //	    },
-//	    OnStoppedLeading: func() {
-//	        log.Fatal("lost leadership, exiting for restart") // 典型：直接退出交由重启
-//	    },
+//	    OnStoppedLeading: func() {}, // client-go 要求非 nil；退出原因用 Run 返回值区分
 //	})
-//	// Run 返回即退出：ctx 取消返回 ctx.Err()，失权返回 ErrLostLeadership
+//	// 退出原因用 Run 返回值区分，勿在 OnStoppedLeading 里无条件 log.Fatal：
+//	//   失权（续约失败放弃领导权）返回 ErrLostLeadership——此时才退出交由重启；
+//	//   ctx 取消返回 ctx.Err()——优雅关停（含从未当选的副本，多副本部署里
+//	//   它们是多数），正常退出即可；否则每次发布/缩容所有副本都以非零码
+//	//   退出，把真实失权告警淹没。
+//	if errors.Is(err, leaderelection.ErrLostLeadership) {
+//	    log.Fatal("lost leadership, exiting for restart")
+//	}
 //
 // Namespace 默认取 POD_NAMESPACE 环境变量，再回退 "default"；
 // Identity 默认取 hostname。
@@ -70,7 +75,12 @@ type Config struct {
 	// 其入参 ctx 取消（ctx 在失去领导权时被取消）；快速返回不会结束选主，
 	// 只会留下空转的续约循环，单活职责随即失效。
 	OnStartedLeading func(ctx context.Context)
-	// OnStoppedLeading 必填：失去领导权回调（典型：log.Fatal 退出交由重启）。
+	// OnStoppedLeading 必填：elector 结束回调——client-go 在 LeaderElector
+	// 退出时无条件触发，不区分退出原因：失去领导权、ctx 取消优雅关停、
+	// 乃至从未当选就退出（client-go 文档明示 "even if it did not start
+	// leading"）都会调用，因此它不等于「失去领导权」。是否失权请以 Run
+	// 的返回值为准（ErrLostLeadership）；勿在此回调里无条件 log.Fatal——
+	// 否则非 leader 副本的每次正常关停（滚动发布/缩容）都会以非零码退出。
 	// client-go 的 LeaderElector 要求该回调非 nil，缺失会导致构造失败。
 	OnStoppedLeading func()
 	// OnNewLeader 新leader产生回调（含自己当选；identity 为新 leader 标识）。
@@ -173,9 +183,11 @@ var ErrLostLeadership = errors.New("k8s leaderelection: lost leadership")
 
 // Run 参与选主并阻塞：当选后 OnStartedLeading 在独立 goroutine 中运行；
 // 失去领导权或 ctx 取消时返回，退出原因通过返回值上抛——ctx 取消返回
-// ctx.Err()，失权退出（续约失败放弃领导权）返回 ErrLostLeadership。
-// OnStoppedLeading 先于返回触发。Run 内部已管理 goroutine，禁止裸并发
-// 调用同一 elector。
+// ctx.Err()（含从未当选就因取消退出的场景），失权退出（续约失败放弃
+// 领导权）返回 ErrLostLeadership。OnStoppedLeading 是「elector 退出」
+// 回调（client-go 无条件触发，不区分失权/关停，见 Config.OnStoppedLeading），
+// 先于返回触发；退出原因以 Run 的返回值为准。Run 内部已管理 goroutine，
+// 禁止裸并发调用同一 elector。
 func Run(ctx context.Context, client kubernetes.Interface, cfg Config) error {
 	le, err := New(client, cfg)
 	if err != nil {

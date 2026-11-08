@@ -369,3 +369,67 @@ func TestReleaseOnCancelSpeedsTakeover(t *testing.T) {
 		t.Fatal("Run(e2) did not return after ctx cancel")
 	}
 }
+
+// #61：从未当选的副本在 ctx 取消时，Run 应返回 ctx.Err()（而非
+// ErrLostLeadership），且 OnStoppedLeading 仍会触发（client-go 语义：
+// elector 退出即回调，不区分是否曾当选）——推荐用法据此用 Run 返回值
+// 区分退出原因，优雅关停不走 log.Fatal。
+func TestRunReturnsContextCanceledWhenNeverElected(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	// e1 先当选并持续续约，保证 e2 全程未当选
+	started1 := make(chan struct{})
+	done1 := make(chan error, 1)
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	go func() {
+		done1 <- Run(ctx1, client, Config{
+			LeaseName:        "app",
+			Identity:         "e1",
+			LeaseDuration:    2 * time.Second,
+			RenewDeadline:    time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			OnStartedLeading: func(context.Context) { close(started1) },
+			OnStoppedLeading: func() {},
+		})
+	}()
+	select {
+	case <-started1:
+	case <-time.After(10 * time.Second):
+		t.Fatal("e1 not elected in time")
+	}
+
+	var stopped2 atomic.Bool
+	done2 := make(chan error, 1)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	go func() {
+		done2 <- Run(ctx2, client, Config{
+			LeaseName:        "app",
+			Identity:         "e2",
+			LeaseDuration:    2 * time.Second,
+			RenewDeadline:    time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			OnStartedLeading: func(context.Context) { t.Error("e2 should never be elected") },
+			OnStoppedLeading: func() { stopped2.Store(true) },
+		})
+	}()
+	// 留出 e2 进入 acquire 循环且确认未当选的时间，再取消
+	time.Sleep(500 * time.Millisecond)
+	if stopped2.Load() {
+		t.Fatal("e2 unexpectedly exited before ctx cancel")
+	}
+	cancel2()
+	select {
+	case err := <-done2:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run(e2) = %v, want context.Canceled (never elected, graceful cancel)", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run(e2) did not return after ctx cancel")
+	}
+	// elector 因从未当选而退出时 OnStoppedLeading 也必须触发（钉住 client-go
+	// 语义：该回调 = elector 结束，≠ 失权）
+	if !stopped2.Load() {
+		t.Fatal("OnStoppedLeading should fire on elector exit even if never elected")
+	}
+}
