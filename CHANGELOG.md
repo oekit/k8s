@@ -2,6 +2,10 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.2.1] — 2026-11-10
+
+- - build: 依赖地板对齐（floor sync，无代码变更）
+
 ## [v0.2.0] — 2026-11-09
 
 - feat(leaderelection): 暴露 ReleaseOnCancel——优雅关停立即释放 Lease（#62）
