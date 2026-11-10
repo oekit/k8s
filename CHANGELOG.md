@@ -12,6 +12,10 @@
 
 关联问题单：oekit/k8s#80。
 
+- fix(leaderelection): 失权被掩蔽为 ctx.Err()（#81）——失权判定提前到 OnStoppedLeading 事件同刻，失权与 ctx 取消并存时失权优先返回 ErrLostLeadership
+
+关联问题单：oekit/k8s#81。
+
 ## [v0.2.2] — 2026-11-11
 
 - - build: 依赖地板对齐（floor sync，无代码变更）
