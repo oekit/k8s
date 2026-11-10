@@ -136,6 +136,19 @@ func TestRESTConfigFromKubeconfigEnv(t *testing.T) {
 	}
 }
 
+// #80：QPS/Burst 负值是 client-go 契约的「禁用客户端限流」（迁移自裸
+// client-go 的 QPS:-1/Burst:-1 场景），必须透传，不得被默认 50/100 改写。
+func TestRESTConfigNegativeQPSBurstDisablesRateLimit(t *testing.T) {
+	p := writeKubeconfig(t)
+	rc, err := RESTConfig(Config{KubeconfigPath: p, QPS: -1, Burst: -1})
+	if err != nil {
+		t.Fatalf("RESTConfig: %v", err)
+	}
+	if rc.QPS != -1 || rc.Burst != -1 {
+		t.Fatalf("QPS/Burst = %v/%v, want -1/-1 (client-go: negative disables client-side rate limiting)", rc.QPS, rc.Burst)
+	}
+}
+
 func TestRESTConfigNoSource(t *testing.T) {
 	// 无 kubeconfig、无 in-cluster 环境时必须显式报错
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))

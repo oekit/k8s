@@ -29,8 +29,9 @@ type Config struct {
 	// 其次集群内环境（POD）自动使用 ServiceAccount，最后回退 ~/.kube/config；
 	// in-cluster 试加载失败不截断回退链，自动回退 kubeconfig 并告警（#79）。
 	KubeconfigPath string `yaml:"kubeconfigPath"`
-	// QPS/Burst 是客户端限流（默认 50/100——client-go 默认 5/10 对
-	// controller 类负载偏保守）。
+	// QPS/Burst 是客户端限流：0 = 未配置（默认 50/100——client-go 默认 5/10
+	// 对 controller 类负载偏保守）；正数 = 覆盖；负值 = 禁用客户端限流
+	// （client-go 契约，迁移自裸 client-go 的 QPS:-1/Burst:-1 场景，#80）。
 	QPS   float32 `yaml:"qps"`
 	Burst int     `yaml:"burst"`
 	// Timeout 是单请求超时；0 表示不设（Watch/长流式调用必须保持 0）。
@@ -98,12 +99,14 @@ func RESTConfig(cfg Config) (*rest.Config, error) {
 			return nil, err
 		}
 	}
-	if cfg.QPS > 0 {
+	// 0 = 未配置取默认；非 0 一律透传——负值是 client-go 契约的
+	// 「禁用客户端限流」，不得吞成默认值（#80）。
+	if cfg.QPS != 0 {
 		rc.QPS = cfg.QPS
 	} else if rc.QPS == 0 {
 		rc.QPS = defaultQPS
 	}
-	if cfg.Burst > 0 {
+	if cfg.Burst != 0 {
 		rc.Burst = cfg.Burst
 	} else if rc.Burst == 0 {
 		rc.Burst = defaultBurst
