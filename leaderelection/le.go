@@ -17,7 +17,7 @@
 //	})
 //	// 退出原因用 Run 返回值区分，勿在 OnStoppedLeading 里无条件 log.Fatal：
 //	//   失权（续约失败放弃领导权）返回 ErrLostLeadership——此时才退出交由重启
-//	//   （失权与 ctx 取消并存时按失权处理，#81）；
+//	//   （含续约失败与取消同窗：失权优先上抛，不被掩蔽成 ctx.Err()，#81）；
 //	//   ctx 取消返回 ctx.Err()——优雅关停（含从未当选的副本，多副本部署里
 //	//   它们是多数），正常退出即可；否则每次发布/缩容所有副本都以非零码
 //	//   退出，把真实失权告警淹没。
@@ -106,14 +106,21 @@ type Config struct {
 
 // New 创建 LeaderElector（不阻塞；调用方持有并自行 Run）。
 func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector, error) {
+	le, _, err := newElector(client, cfg)
+	return le, err
+}
+
+// newElector 是 New 的内核，额外返回续约事件记录器（#81 失权判定用，
+// 仅 Run 消费）。
+func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector, *renewRecorder, error) {
 	if cfg.LeaseName == "" {
-		return nil, fmt.Errorf("k8s leaderelection: lease name is empty")
+		return nil, nil, fmt.Errorf("k8s leaderelection: lease name is empty")
 	}
 	if cfg.OnStartedLeading == nil {
-		return nil, fmt.Errorf("k8s leaderelection: OnStartedLeading is required")
+		return nil, nil, fmt.Errorf("k8s leaderelection: OnStartedLeading is required")
 	}
 	if cfg.OnStoppedLeading == nil {
-		return nil, fmt.Errorf("k8s leaderelection: OnStoppedLeading is required")
+		return nil, nil, fmt.Errorf("k8s leaderelection: OnStoppedLeading is required")
 	}
 	ns := cfg.Namespace
 	if ns == "" {
@@ -126,7 +133,7 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 	if id == "" {
 		h, err := os.Hostname()
 		if err != nil {
-			return nil, fmt.Errorf("k8s leaderelection: hostname: %w", err)
+			return nil, nil, fmt.Errorf("k8s leaderelection: hostname: %w", err)
 		}
 		id = h
 	}
@@ -141,14 +148,14 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 		retryPeriod = defaultRetryPeriod
 	}
 	if renewDeadline >= leaseDuration {
-		return nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be < leaseDuration (%s)",
+		return nil, nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be < leaseDuration (%s)",
 			renewDeadline, leaseDuration)
 	}
 	// retryPeriod 须显著小于 renewDeadline（client-go 建议留 1.2 倍抖动裕度）：
 	// 否则续约窗口内仅一次重试机会，网络抖动一次就放弃领导权。
 	// retryPeriod*6/5 即 retryPeriod*1.2（整数运算，避免浮点转换）。
 	if minRenew := retryPeriod * 6 / 5; renewDeadline <= minRenew {
-		return nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be > retryPeriod (%s) * 1.2",
+		return nil, nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be > retryPeriod (%s) * 1.2",
 			renewDeadline, retryPeriod)
 	}
 
@@ -159,8 +166,9 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 			Identity: id,
 		},
 	}
+	rec := &renewRecorder{Interface: lock}
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
-		Lock:          lock,
+		Lock:          rec,
 		LeaseDuration: leaseDuration,
 		RenewDeadline: renewDeadline,
 		RetryPeriod:   retryPeriod,
@@ -172,10 +180,10 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 		ReleaseOnCancel: cfg.ReleaseOnCancel,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("k8s leaderelection: new elector: %w", err)
+		return nil, nil, fmt.Errorf("k8s leaderelection: new elector: %w", err)
 	}
 	log.Info("elector created", "lease", cfg.LeaseName, "namespace", ns, "identity", id)
-	return le, nil
+	return le, rec, nil
 }
 
 // ErrLostLeadership 表示 elector 因失去领导权（续约窗口内续约失败）而退出。
@@ -183,37 +191,95 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 // 而非把该错误当成功吞掉。
 var ErrLostLeadership = errors.New("k8s leaderelection: lost leadership")
 
+// renewRecorder 包装 resourcelock.Interface，在续约事件发生时刻记录续约
+// 结果（#81）：失权判定不得放在 le.Run 返回之后事后读 ctx.Err()——「续约
+// 失败放弃领导权」与「ctx 取消」两条退出路径并存时（续约开始失败后
+// RenewDeadline 窗口内触发 SIGTERM/滚动重启），失权会被掩蔽为 ctx.Err()，
+// 失权副本按「优雅关停」零退出（workflow#61 同构错误面掩蔽）。全部方法
+// 由 le.Run 所在 goroutine 调用（acquire/renew/release/OnStoppedLeading 均
+// 在该 goroutine 内），Run 返回后读取无并发；按共享状态口径仍以 atomic 保护。
+type renewRecorder struct {
+	resourcelock.Interface
+	leading      atomic.Bool // 已成功 create/update 持有 Lease
+	renewFailing atomic.Bool // 持有期间续约失败在飞（成功续约/主动释放即清零）
+}
+
+// Create 实现 resourcelock.Interface，结果按事件同刻入账。
+func (r *renewRecorder) Create(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
+	err := r.Interface.Create(ctx, ler)
+	r.observe(ler, err)
+	return err
+}
+
+// Update 实现 resourcelock.Interface，结果按事件同刻入账。
+func (r *renewRecorder) Update(ctx context.Context, ler resourcelock.LeaderElectionRecord) error {
+	err := r.Interface.Update(ctx, ler)
+	r.observe(ler, err)
+	return err
+}
+
+// observe 入账一次 create/update 的续约结果：holderIdentity 非空是持有方
+// 的续约（acquire 首次成功后进入持有态），置空是 ReleaseOnCancel 的主动
+// 释放——成功即清账，优雅交棒不算失权。取消类失败是关停副作用：
+// workflow#61 口径「取消副作用不得顶真实失败」反向同理，取消副作用也不得
+// 记成续约失败；其余失败（含续约窗口超时）即续约失败事件，事件同刻入账。
+func (r *renewRecorder) observe(ler resourcelock.LeaderElectionRecord, err error) {
+	if ler.HolderIdentity == "" {
+		if err == nil {
+			r.leading.Store(false)
+			r.renewFailing.Store(false)
+		}
+		return
+	}
+	if err == nil {
+		r.leading.Store(true)
+		r.renewFailing.Store(false)
+		return
+	}
+	if r.leading.Load() && !errors.Is(err, context.Canceled) {
+		r.renewFailing.Store(true)
+	}
+}
+
+// lost 判定失权信号：持有期间存在未被成功续约/主动释放清除的续约失败，
+// 即「续约失败与 ctx 取消同窗」的失权（#81）。
+func (r *renewRecorder) lost() bool {
+	return r.leading.Load() && r.renewFailing.Load()
+}
+
 // Run 参与选主并阻塞：当选后 OnStartedLeading 在独立 goroutine 中运行；
 // 失去领导权或 ctx 取消时返回，退出原因通过返回值上抛——失权退出（续约
 // 失败放弃领导权）返回 ErrLostLeadership，ctx 取消返回 ctx.Err()（含从未
 // 当选就因取消退出的场景）。失权与 ctx 取消并存时失权优先（真实失败优先
-// 于取消副作用，#81，与 workflow#61 同构）：ctx 取消时续约仍在窗口内
-// （client-go 尚未放弃领导权）不算失权，仍按 ctx.Err() 返回。
-// OnStoppedLeading 是「elector 退出」回调（client-go 无条件触发，不区分
-// 失权/关停，见 Config.OnStoppedLeading），先于返回触发；退出原因以 Run
-// 的返回值为准。Run 内部已管理 goroutine，禁止裸并发调用同一 elector。
+// 于取消副作用，workflow#61 分类口径，#81）：续约失败与取消同窗（续约
+// 已在失败、RenewDeadline 窗口内触发关停）按失权上抛，ctx 取消信息仅留
+// 在报文，errors.Is(err, context.Canceled) 不成立——失权副本不得被消费方
+// 按「优雅关停」零退出吞掉告警。OnStoppedLeading 是「elector 退出」回调
+// （client-go 无条件触发，不区分失权/关停，见 Config.OnStoppedLeading），
+// 先于返回触发；退出原因以 Run 的返回值为准。Run 内部已管理 goroutine，
+// 禁止裸并发调用同一 elector。
 func Run(ctx context.Context, client kubernetes.Interface, cfg Config) error {
-	// 失权判定放在事件同刻（OnStoppedLeading 触发瞬间），而非 le.Run 返回后
-	// 事后读 ctx.Err()：client-go 在「续约失败放弃领导权」与「ctx 取消」两条
-	// 退出路径下都触发 OnStoppedLeading，事后判定会让并存时的失权被掩蔽成
-	// ctx.Err()，失权副本按「优雅关停」零退出（#81）。两条路径在回调触发
-	// 瞬间可区分：失权退出时 ctx 尚在，取消退出时 ctx 已取消。
-	var lost atomic.Bool
+	// 失权判定放在事件同刻（#81）：① OnStoppedLeading 触发瞬间 ctx 尚在，
+	// 即 client-go 已放弃领导权（续约失败语义）；② 续约失败在飞由
+	// renewRecorder 在续约失败事件时刻入账，覆盖「续约失败与取消同窗」——
+	// 此前判定放在 le.Run 返回后读 ctx.Err()，两条退出路径并存时失权被
+	// 掩蔽成 ctx.Err()，失权副本按「优雅关停」零退出。
+	var stoppedWhileAlive atomic.Bool
 	if cfg.OnStoppedLeading != nil {
 		stopped := cfg.OnStoppedLeading
 		cfg.OnStoppedLeading = func() {
 			if ctx.Err() == nil {
-				lost.Store(true)
+				stoppedWhileAlive.Store(true)
 			}
 			stopped()
 		}
 	}
-	le, err := New(client, cfg)
+	le, rec, err := newElector(client, cfg)
 	if err != nil {
 		return err
 	}
 	le.Run(ctx)
-	if lost.Load() {
+	if stoppedWhileAlive.Load() || rec.lost() {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// 失权优先于取消副作用；ctx 取消信息保留在报文里。
 			return fmt.Errorf("%w (ctx also canceled: %v)", ErrLostLeadership, ctxErr)

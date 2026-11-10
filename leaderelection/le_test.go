@@ -166,6 +166,73 @@ func TestRunReturnsErrLostLeadership(t *testing.T) {
 	}
 }
 
+// #81 推演场景的回归钉：续约开始失败（apiserver 抖动）后，在 RenewDeadline
+// 窗口内触发滚动重启（SIGTERM → ctx 取消）——client-go 尚未放弃领导权，
+// 但续约失败与取消同窗并存。此前失权判定放在 le.Run 返回后读 ctx.Err()，
+// 并存时失权必被掩蔽为 context.Canceled，失权副本按「优雅关停」零退出
+// （workflow#61 同构错误面掩蔽）。修复后失权信号（续约失败）优先于取消
+// 副作用如实上抛：errors.Is(err, ErrLostLeadership) 为真，且错误面确定性
+// 归为失权（errors.Is(err, context.Canceled) 不成立）。
+// 多轮钉住非掷硬币（for range int）：每轮在首个续约失败事件入账后立即
+// 取消，取消点确定性落在失败窗口内、放弃窗口前。
+func TestRenewFailureWithConcurrentCancelSurfacesLostLeadership(t *testing.T) {
+	const rounds = 5
+	for i := range rounds {
+		client := fake.NewSimpleClientset()
+		var failRenew atomic.Bool
+		renewFailed := make(chan struct{}, 1) // 首个续约失败事件（reactor 内发信号）
+		client.PrependReactor("update", "leases",
+			func(_ clienttesting.Action) (bool, runtime.Object, error) {
+				if failRenew.Load() {
+					select {
+					case renewFailed <- struct{}{}:
+					default:
+					}
+					return true, nil, errors.New("lease update boom")
+				}
+				return false, nil, nil
+			})
+		started := make(chan struct{})
+		done := make(chan error, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			done <- Run(ctx, client, Config{
+				LeaseName:        "app",
+				Identity:         "e1",
+				LeaseDuration:    2 * time.Second,
+				RenewDeadline:    time.Second,
+				RetryPeriod:      200 * time.Millisecond,
+				OnStartedLeading: func(context.Context) { failRenew.Store(true); close(started) },
+				OnStoppedLeading: func() {},
+			})
+		}()
+		select {
+		case <-started:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: not elected in time", i+1)
+		}
+		// 等首个续约失败事件入账后立即取消：取消点落在续约失败窗口内
+		//（RenewDeadline 1s），client-go 尚未放弃领导权。
+		select {
+		case <-renewFailed:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: no renew failure observed", i+1)
+		}
+		cancel()
+		select {
+		case err := <-done:
+			if !errors.Is(err, ErrLostLeadership) {
+				t.Fatalf("round %d: Run() = %v, want ErrLostLeadership (renew failure in the cancel window must not be masked as graceful shutdown)", i+1, err)
+			}
+			if errors.Is(err, context.Canceled) {
+				t.Fatalf("round %d: Run() = %v, want deterministic lost-leadership face (not context.Canceled)", i+1, err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatalf("round %d: Run did not return", i+1)
+		}
+	}
+}
+
 // #81：续约失败放弃领导权（失权）与 ctx 取消并存时，失权不得被掩蔽为
 // ctx.Err()——否则失权副本按「优雅关停」零退出（workflow#61 同构错误面
 // 掩蔽）。本用例在 OnStoppedLeading 触发瞬间取消 ctx，构造确定性并存窗口：

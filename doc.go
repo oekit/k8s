@@ -23,7 +23,8 @@
 //	    OnStartedLeading: func(ctx context.Context) { serve(ctx) },
 //	    OnStoppedLeading: func() {}, // client-go 要求非 nil；退出原因用 Run 返回值区分
 //	})
-//	// 失权（续约失败放弃领导权）返回 ErrLostLeadership——此时才退出交由重启；
+//	// 失权（续约失败放弃领导权）返回 ErrLostLeadership——此时才退出交由重启
+//	// （含续约失败与取消同窗：失权优先上抛，不被掩蔽成 ctx.Err()，#81）；
 //	// ctx 取消返回 ctx.Err()——优雅关停（含从未当选的副本），正常退出即可，
 //	// 勿无条件 log.Fatal（否则每次发布/缩容所有副本都非零退出）
 //	if errors.Is(err, k8s.leaderelection.ErrLostLeadership) {

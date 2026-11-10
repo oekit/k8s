@@ -8,7 +8,7 @@
 ## 安装
 
 ```bash
-go get github.com/oekit/k8s@v0.2.1
+go get github.com/oekit/k8s@v0.2.3
 ```
 
 ## 这个仓库做什么
@@ -24,8 +24,8 @@ go get github.com/oekit/k8s@v0.2.1
 
 | 包 | import 路径 | 做什么 |
 |---|---|---|
-| `k8s`（模块根包） | `github.com/oekit/k8s` | `RESTConfig`（解析顺序：显式 KubeconfigPath → KUBECONFIG 显式意图 → in-cluster → ~/.kube/config；QPS/Burst 默认 50/100、UserAgent 默认 oekit-k8s）、`NewClientset`、`NewDynamicClient`（CRD/GVR）、`InCluster()` 探测（判定对齐 rest.InClusterConfig） |
-| `leaderelection` | `github.com/oekit/k8s/leaderelection` | Lease 选主简化封装：`New`/`Run`（阻塞当选，退出原因上抛：ctx 取消返回 `ctx.Err()`，失权返回 `ErrLostLeadership`）+ `OnStartedLeading`/`OnStoppedLeading`/`OnNewLeader` 回调（`OnStoppedLeading` 是 elector 退出回调，client-go 无条件触发、不区分失权/关停——判断失权用 `Run` 返回值）；`Config.ReleaseOnCancel` 优雅关停立即释放 Lease（默认 false：继任者等租约自然过期，最长 15s 空窗）；Namespace 默认 POD_NAMESPACE → default；仅要求 Lease get/create/update 权限 |
+| `k8s`（模块根包） | `github.com/oekit/k8s` | `RESTConfig`（解析顺序：显式 KubeconfigPath → KUBECONFIG 显式意图 → in-cluster → ~/.kube/config；QPS/Burst 默认 50/100、负值=禁用限流（client-go 契约）、UserAgent 默认 oekit-k8s）、`NewClientset`、`NewDynamicClient`（CRD/GVR）、`InCluster()` 探测（判定对齐 rest.InClusterConfig） |
+| `leaderelection` | `github.com/oekit/k8s/leaderelection` | Lease 选主简化封装：`New`/`Run`（阻塞当选，退出原因上抛：ctx 取消返回 `ctx.Err()`，失权返回 `ErrLostLeadership`；失权与 ctx 取消并存时失权优先，续约失败与取消同窗不掩蔽成 `ctx.Err()`）+ `OnStartedLeading`/`OnStoppedLeading`/`OnNewLeader` 回调（`OnStoppedLeading` 是 elector 退出回调，client-go 无条件触发、不区分失权/关停——判断失权用 `Run` 返回值）；`Config.ReleaseOnCancel` 优雅关停立即释放 Lease（默认 false：继任者等租约自然过期，最长 15s 空窗）；Namespace 默认 POD_NAMESPACE → default；仅要求 Lease get/create/update 权限 |
 
 ## 快速使用
 
@@ -58,7 +58,11 @@ if errors.Is(err, leaderelection.ErrLostLeadership) {
 elector 退出时无条件触发——失去领导权、ctx 取消优雅关停、乃至从未当选
 就退出（多副本部署里非 leader 副本占多数）都会调用。是否失权以 `Run`
 的返回值为准：`ErrLostLeadership` = 失权（典型处理：退出交由重启）；
-`ctx.Err()` = 优雅关停（正常退出即可）。
+`ctx.Err()` = 优雅关停（正常退出即可）。**失权与 ctx 取消并存时失权优先**
+（真实失败优先于取消副作用，workflow#61 分类口径，#81）：续约失败与取消
+同窗（续约已在失败、RenewDeadline 窗口内触发关停）按失权上抛，ctx 取消
+信息仅留在报文，`errors.Is(err, context.Canceled)` 不成立——失权副本不得
+被按「优雅关停」零退出吞掉告警。
 
 默认（`ReleaseOnCancel: false`）优雅关停**不释放** Lease，继任者须等租约
 自然过期——按缺省 `LeaseDuration` 15s 计，每次滚动发布/缩容最长 15s 无人
@@ -74,7 +78,9 @@ elector 退出时无条件触发——失去领导权、ctx 取消优雅关停�
 ### 客户端限流
 
 client-go 默认 QPS 5/Burst 10 对 controller 类负载偏保守；本仓默认
-QPS 50/Burst 100，可用 `Config{QPS: ..., Burst: ...}` 覆盖。
+QPS 50/Burst 100，可用 `Config{QPS: ..., Burst: ...}` 覆盖。三态语义对齐
+client-go（#80）：0 = 默认 50/100，正数 = 覆盖，**负值 = 禁用客户端限流**
+（迁移自裸 client-go 的 `QPS:-1/Burst:-1` 场景，不再被静默改写成默认值）。
 `Timeout` 默认 0（不设单请求超时）——Watch/长流式调用必须保持 0。
 
 ## 边界
@@ -107,7 +113,7 @@ MIT
 | [network](https://github.com/oekit/network) | 轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具 | [concurrency](https://github.com/oekit/concurrency)、[logx](https://github.com/oekit/logx)、[tracing](https://github.com/oekit/tracing) |
 | [timertask](https://github.com/oekit/timertask) | 分片定时任务（FNV-1a、心跳续约）；v0.1.5 起可选可靠投递 DeliveryAtLeastOnce（租约 + Ack + 可见性超时；过期租约回扫重投/死信、停机 best-effort 收租，v0.1.7 接入生命周期真正生效）；v0.2.0 起 **Redis 后端迁至嵌套模块 timertask/redis**（根包不再引 go-redis/logx/concurrency，require 仅 pkg——import timertask 与 import timertask/local 的模块依赖面均无 redis，纯 stdlib 嵌入式场景可用）+ **新增 local 子包 cron 调度器 Scheduler**（表达式复用 pkg/timex/cron 不另写一份；并发度/CatchUp 补跑/退出语义明确，FakeClock 假时钟驱动、触发点序列可确定性断言） | [pkg](https://github.com/oekit/pkg) |
 | [middleware](https://github.com/oekit/middleware) | Hertz 标准中间件栈（模块根 mw，双层目录已收平）+ contrib 桥接 + hmw + SheddingMiddleware 自适应降载 + chainmw 子包（transport 感知框架无关中间件，基于 core/chain+transport：Recovery 带 panic 隔离上报钩子 WithRecoveryReporter、AccessLog skip+redact+自定义字段、MetadataPropagate——kitex 经 kitex/chainmw.ToKitex 复用同一实现，根包 Recovery/AccessLog 已薄壳化复用 chainmw 内核、下游 handler 可经 transport.FromServerContext 读协议无关传输信息）；v0.6.0 起 accesslog 凭证路径脱敏（WithAccessLogRedactPathPrefixes）、ratelimit 默认 KeyFunc 去端口（连接桶→地址桶）；v0.11.0 起 WithAccessLogSink 落库 sink（AccessRecord{Method,Path,Status,Latency,ClientIP,UserAgent,TraceID} 与日志同源、c 同传可读业务键、error/panic 只记 Warn 不影响主链路、SkipPaths 命中不触发）+ chainmw.WithSink 内核同构（kitex 随 ToKitex 获得）+ StackConfig.DisableResponseWrap 响应自管一键形态（TraceID→Recovery→AccessLog）与 AccessLogOptions 透传 + doc/README「适用边界」段（响应契约统一 vs handler 自管的推荐组合，#18）；v0.12.0 起 AccessLog panic 恢复点产出记录（AccessRecord.Panic 标记 + Err 摘要，Hertz status 按 Recovery 缺省 500）后按原值重抛——panic 请求不再零访问记录，sink/kitex 桥接同步留痕，#20；v0.13.0 起 accesslog 内建日志可关闭/改道（WithAccessLogSilent 只采不写、WithAccessLogLogger 注入宿主 logger 避免双写；静默下 skip/redact/sink/panic 记录照常），内核 chainmw.WithSilent 同构（kitex 随 ToKitex 获得），#38 | [concurrency](https://github.com/oekit/concurrency)、[core](https://github.com/oekit/core)、[logx](https://github.com/oekit/logx)、[metrics](https://github.com/oekit/metrics)、[pkg](https://github.com/oekit/pkg)、[registry](https://github.com/oekit/registry)、[tracing](https://github.com/oekit/tracing) |
-| [k8s](https://github.com/oekit/k8s) | Kubernetes 客户端封装——RESTConfig/Clientset/DynamicClient 构建（显式 kubeconfig → KUBECONFIG 显式意图 → in-cluster 自动 → ~/.kube/config 逐级回退，QPS/Burst 限流默认 50/100）+ leaderelection 子包 Lease 选主简化封装（OnStartedLeading/OnStoppedLeading/OnNewLeader 回调，主备单活，仅要求 Lease CRUD 权限） | [logx](https://github.com/oekit/logx) |
+| [k8s](https://github.com/oekit/k8s) | Kubernetes 客户端封装——RESTConfig/Clientset/DynamicClient 构建（显式 kubeconfig → KUBECONFIG 显式意图 → in-cluster 自动 → ~/.kube/config 逐级回退，QPS/Burst 限流默认 50/100、负值=禁用客户端限流）+ leaderelection 子包 Lease 选主简化封装（OnStartedLeading/OnStoppedLeading/OnNewLeader 回调，主备单活，仅要求 Lease CRUD 权限；失权与 ctx 取消并存时失权优先上抛 ErrLostLeadership，续约失败与取消同窗不掩蔽） | [logx](https://github.com/oekit/logx) |
 | [nns](https://github.com/oekit/nns) | NNS 服务治理客户端——provider 无关发现/配置/实例缓存 | [concurrency](https://github.com/oekit/concurrency)、[core](https://github.com/oekit/core)、[logx](https://github.com/oekit/logx)、[registry](https://github.com/oekit/registry) |
 | [nns-endpoint](https://github.com/oekit/nns-endpoint) | NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池 | [httpx](https://github.com/oekit/httpx)、[logx](https://github.com/oekit/logx)、[metrics](https://github.com/oekit/metrics)、[nns](https://github.com/oekit/nns)、[registry](https://github.com/oekit/registry) |
 | [bootstrap](https://github.com/oekit/bootstrap) | 应用生命周期引导——New(WithServiceName/WithShutdownTimeout/WithBeforeServe) + Run(fn) + healthz；App.Ready/ReadyChan/IsReady 就绪门（幂等并发安全）——嵌套 bootstrap/nacos 自 v0.3.0 起 NNS 注册延迟到 Ready 之后（server 就绪 → userFn 触发 Ready → 才进注册中心）、关停序 nns 反注册先于 server 关闭；就绪门漏接时可观测——nacos 看门狗超时打 ERROR 点明「服务不会注册到注册中心」（WithReadyTimeout 可调）+ NNSComponent.RegistrationState() 暴露注册阶段（pending/registered/failed/skipped/shutdown）；Metrics/Tracing 在嵌套模块 bootstrap/obs | [concurrency](https://github.com/oekit/concurrency)、[core](https://github.com/oekit/core)、[logx](https://github.com/oekit/logx) |
