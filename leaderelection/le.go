@@ -16,7 +16,8 @@
 //	    OnStoppedLeading: func() {}, // client-go 要求非 nil；退出原因用 Run 返回值区分
 //	})
 //	// 退出原因用 Run 返回值区分，勿在 OnStoppedLeading 里无条件 log.Fatal：
-//	//   失权（续约失败放弃领导权）返回 ErrLostLeadership——此时才退出交由重启；
+//	//   失权（续约失败放弃领导权）返回 ErrLostLeadership——此时才退出交由重启
+//	//   （失权与 ctx 取消并存时按失权处理，#81）；
 //	//   ctx 取消返回 ctx.Err()——优雅关停（含从未当选的副本，多副本部署里
 //	//   它们是多数），正常退出即可；否则每次发布/缩容所有副本都以非零码
 //	//   退出，把真实失权告警淹没。
@@ -36,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/oekit/logx"
@@ -182,21 +184,44 @@ func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector
 var ErrLostLeadership = errors.New("k8s leaderelection: lost leadership")
 
 // Run 参与选主并阻塞：当选后 OnStartedLeading 在独立 goroutine 中运行；
-// 失去领导权或 ctx 取消时返回，退出原因通过返回值上抛——ctx 取消返回
-// ctx.Err()（含从未当选就因取消退出的场景），失权退出（续约失败放弃
-// 领导权）返回 ErrLostLeadership。OnStoppedLeading 是「elector 退出」
-// 回调（client-go 无条件触发，不区分失权/关停，见 Config.OnStoppedLeading），
-// 先于返回触发；退出原因以 Run 的返回值为准。Run 内部已管理 goroutine，
-// 禁止裸并发调用同一 elector。
+// 失去领导权或 ctx 取消时返回，退出原因通过返回值上抛——失权退出（续约
+// 失败放弃领导权）返回 ErrLostLeadership，ctx 取消返回 ctx.Err()（含从未
+// 当选就因取消退出的场景）。失权与 ctx 取消并存时失权优先（真实失败优先
+// 于取消副作用，#81，与 workflow#61 同构）：ctx 取消时续约仍在窗口内
+// （client-go 尚未放弃领导权）不算失权，仍按 ctx.Err() 返回。
+// OnStoppedLeading 是「elector 退出」回调（client-go 无条件触发，不区分
+// 失权/关停，见 Config.OnStoppedLeading），先于返回触发；退出原因以 Run
+// 的返回值为准。Run 内部已管理 goroutine，禁止裸并发调用同一 elector。
 func Run(ctx context.Context, client kubernetes.Interface, cfg Config) error {
+	// 失权判定放在事件同刻（OnStoppedLeading 触发瞬间），而非 le.Run 返回后
+	// 事后读 ctx.Err()：client-go 在「续约失败放弃领导权」与「ctx 取消」两条
+	// 退出路径下都触发 OnStoppedLeading，事后判定会让并存时的失权被掩蔽成
+	// ctx.Err()，失权副本按「优雅关停」零退出（#81）。两条路径在回调触发
+	// 瞬间可区分：失权退出时 ctx 尚在，取消退出时 ctx 已取消。
+	var lost atomic.Bool
+	if cfg.OnStoppedLeading != nil {
+		stopped := cfg.OnStoppedLeading
+		cfg.OnStoppedLeading = func() {
+			if ctx.Err() == nil {
+				lost.Store(true)
+			}
+			stopped()
+		}
+	}
 	le, err := New(client, cfg)
 	if err != nil {
 		return err
 	}
 	le.Run(ctx)
-	// ctx 已取消（调用方主动关停）优先按取消原因返回；否则为失权退出。
-	if err := ctx.Err(); err != nil {
-		return err
+	if lost.Load() {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// 失权优先于取消副作用；ctx 取消信息保留在报文里。
+			return fmt.Errorf("%w (ctx also canceled: %v)", ErrLostLeadership, ctxErr)
+		}
+		return ErrLostLeadership
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
 	return ErrLostLeadership
 }

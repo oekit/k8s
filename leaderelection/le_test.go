@@ -166,6 +166,51 @@ func TestRunReturnsErrLostLeadership(t *testing.T) {
 	}
 }
 
+// #81：续约失败放弃领导权（失权）与 ctx 取消并存时，失权不得被掩蔽为
+// ctx.Err()——否则失权副本按「优雅关停」零退出（workflow#61 同构错误面
+// 掩蔽）。本用例在 OnStoppedLeading 触发瞬间取消 ctx，构造确定性并存窗口：
+// client-go 失权退出时先触发 OnStoppedLeading 再从 Run 返回，若失权判定
+// 发生在返回后读 ctx.Err()，失权必被掩蔽成 context.Canceled。
+func TestLostLeadershipNotMaskedByCtxCancel(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	var failRenew atomic.Bool
+	client.PrependReactor("update", "leases",
+		func(_ clienttesting.Action) (bool, runtime.Object, error) {
+			if failRenew.Load() {
+				return true, nil, errors.New("lease update boom")
+			}
+			return false, nil, nil
+		})
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		done <- Run(ctx, client, Config{
+			LeaseName:        "app",
+			Identity:         "e1",
+			LeaseDuration:    2 * time.Second,
+			RenewDeadline:    time.Second,
+			RetryPeriod:      200 * time.Millisecond,
+			OnStartedLeading: func(context.Context) { failRenew.Store(true); close(started) },
+			OnStoppedLeading: cancel, // 失权回调触发瞬间 SIGTERM（ctx 取消）——两错误面并存
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("not elected in time")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrLostLeadership) {
+			t.Fatalf("Run() = %v, want ErrLostLeadership (lost leadership must not be masked by ctx cancel)", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run did not return after leadership loss")
+	}
+}
+
 func TestConfigValidation(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	if _, err := New(client, Config{}); err == nil {
