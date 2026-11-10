@@ -2,19 +2,13 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [Unreleased]
+## [v0.2.3] — 2026-11-11
 
 - fix(k8s): InCluster 弱判定截断回退链（#79）——InCluster 判定对齐 rest.InClusterConfig，显式 KUBECONFIG 优先于 in-cluster，SA 试加载失败回退 kubeconfig 并告警
-
-关联问题单：oekit/k8s#79。
-
 - fix(k8s): QPS/Burst 负值被静默改写为默认 50/100（#80）——负值透传即禁用客户端限流（client-go 契约），0 仍取默认
+- fix(leaderelection): 失权被掩蔽为 ctx.Err()（#81）——失权判定入账到事件同刻（OnStoppedLeading 瞬间 + 续约失败事件），续约失败与 ctx 取消同窗时失权优先上抛 ErrLostLeadership（workflow#61 分类口径：真实失败优先于取消副作用，错误面确定性归为失权）
 
-关联问题单：oekit/k8s#80。
-
-- fix(leaderelection): 失权被掩蔽为 ctx.Err()（#81）——失权判定提前到 OnStoppedLeading 事件同刻，失权与 ctx 取消并存时失权优先返回 ErrLostLeadership
-
-关联问题单：oekit/k8s#81。
+关联问题单：k8s#79、k8s#80、k8s#81。
 
 ## [v0.2.2] — 2026-11-11
 
