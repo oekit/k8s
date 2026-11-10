@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 const testKubeconfig = `apiVersion: v1
@@ -39,10 +41,58 @@ func TestInCluster(t *testing.T) {
 	if InCluster() {
 		t.Fatal("InCluster should be false without env")
 	}
+	// 半注入环境（env 注入但 ServiceAccount token 不可加载）不得判为集群内，
+	// 否则 kubeconfig 回退链被截断（#79）。
 	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
 	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
+	if _, statErr := os.Stat("/var/run/secrets/kubernetes.io/serviceaccount/token"); statErr != nil {
+		if InCluster() {
+			t.Fatal("InCluster should be false in half-injected env (env set but SA token unreadable)")
+		}
+		return
+	}
 	if !InCluster() {
-		t.Fatal("InCluster should be true with env")
+		t.Fatal("InCluster should be true with env and loadable SA token")
+	}
+}
+
+// #79：半注入环境（in-cluster env 注入但 ServiceAccount token 不可加载）
+// 下有效 KUBECONFIG 不得被无视——KUBECONFIG 显式设置即显式意图（kubectl
+// 同语义），优先于 in-cluster 自动探测。
+func TestRESTConfigKubeconfigEnvWinsOverInClusterEnv(t *testing.T) {
+	p := writeKubeconfig(t)
+	t.Setenv("KUBECONFIG", p)
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
+	rc, err := RESTConfig(Config{})
+	if err != nil {
+		t.Fatalf("RESTConfig with valid KUBECONFIG in half-injected env: %v", err)
+	}
+	if rc.Host != "https://192.168.1.10:6443" {
+		t.Fatalf("Host = %q, want KUBECONFIG host", rc.Host)
+	}
+}
+
+// #79：半注入环境下 in-cluster 试加载失败不得截断回退链——继续走
+// ~/.kube/config 默认规则，而非直接报错。（clientcmd 在包初始化时固化
+// RecommendedHomeFile，HOME 覆盖不生效，这里直接注入该导出变量。）
+func TestRESTConfigHalfInClusterEnvFallsBackToHomeKubeconfig(t *testing.T) {
+	homeKubeconfig := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(homeKubeconfig, []byte(testKubeconfig), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+	origHomeFile := clientcmd.RecommendedHomeFile
+	clientcmd.RecommendedHomeFile = homeKubeconfig
+	defer func() { clientcmd.RecommendedHomeFile = origHomeFile }()
+	t.Setenv("KUBECONFIG", "")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "443")
+	rc, err := RESTConfig(Config{})
+	if err != nil {
+		t.Fatalf("RESTConfig should fall back to ~/.kube/config in half-injected env: %v", err)
+	}
+	if rc.Host != "https://192.168.1.10:6443" {
+		t.Fatalf("Host = %q, want ~/.kube/config host", rc.Host)
 	}
 }
 

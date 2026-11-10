@@ -2,6 +2,12 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [Unreleased]
+
+- fix(k8s): InCluster 弱判定截断回退链（#79）——InCluster 判定对齐 rest.InClusterConfig，显式 KUBECONFIG 优先于 in-cluster，SA 试加载失败回退 kubeconfig 并告警
+
+关联问题单：oekit/k8s#79。
+
 ## [v0.2.2] — 2026-11-11
 
 - - build: 依赖地板对齐（floor sync，无代码变更）
