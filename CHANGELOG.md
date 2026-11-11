@@ -2,6 +2,15 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.2.4] — 2026-11-12
+
+- - refactor(leaderelection): 失权错误面收敛到 Run 单入口，New 降级 Deprecated（#90）——经 New 自行 le.Run 的调用方拿不到续约事件记录器、无法区分 ErrLostLeadership 与 ctx 取消，双入口退出原因契约收敛为 Run；New 保外部行为兼容（签名与行为不变），v0.3.0 起移除，测试改走 newElector 内核。语义差异：New 路径退出原因契约退化为「OnStoppedLeading + 自查 ctx」
+- refactor(k8s): in-cluster 判定一次、实取一次（#91）——RESTConfig 单次 rest.InClusterConfig 同时完成判定与配置实取，消除「InCluster() 预判 + 分支内再取」每次客户端构造双读 SA token 的 TOCTOU；InCluster() 保留作外部探测。行为差异：半注入环境（POD env 注入但 SA 不可用）回退 kubeconfig 时现会告警并把 in-cluster 失败原因并入报文（此前静默），纯开发机静默回退不变
+- refactor(k8s): Config.Timeout 零/负值语义补齐「<=0 均为不设」（#92）——负值无 client-go 契约按 0 处理（与 QPS/Burst 负值=禁用限流不同域），godoc/README 对称化 + 负值钉子测试
+- build: 依赖地板对齐 logx v0.9.2 → v0.10.0（floor sync，无代码变更；logx v0.10.0 的 BaseLogger.Level BREAKING 不触及本仓）
+
+关联问题单：k8s#90、k8s#91、k8s#92。
+
 ## [v0.2.3] — 2026-11-11
 
 - fix(k8s): InCluster 弱判定截断回退链（#79）——InCluster 判定对齐 rest.InClusterConfig，显式 KUBECONFIG 优先于 in-cluster，SA 试加载失败回退 kubeconfig 并告警
