@@ -20,7 +20,7 @@ func startElector(t *testing.T, client *fake.Clientset, name string,
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	le, err := New(client, Config{
+	le, _, err := newElector(client, Config{
 		LeaseName:        "app",
 		Identity:         name, // 显式身份：默认 hostname 会让同进程双 elector 互认
 		LeaseDuration:    2 * time.Second,
@@ -30,7 +30,7 @@ func startElector(t *testing.T, client *fake.Clientset, name string,
 		OnStoppedLeading: stopped,
 	})
 	if err != nil {
-		t.Fatalf("New(%s): %v", name, err)
+		t.Fatalf("newElector(%s): %v", name, err)
 	}
 	go func() {
 		le.Run(ctx)
@@ -280,19 +280,20 @@ func TestLostLeadershipNotMaskedByCtxCancel(t *testing.T) {
 
 func TestConfigValidation(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	if _, err := New(client, Config{}); err == nil {
+	// 直接测 newElector 内核（New 是其 Deprecated 兼容薄壳，#90）
+	if _, _, err := newElector(client, Config{}); err == nil {
 		t.Fatal("empty lease name should fail")
 	}
-	if _, err := New(client, Config{LeaseName: "app"}); err == nil {
+	if _, _, err := newElector(client, Config{LeaseName: "app"}); err == nil {
 		t.Fatal("missing OnStartedLeading should fail")
 	}
-	if _, err := New(client, Config{
+	if _, _, err := newElector(client, Config{
 		LeaseName:        "app",
 		OnStartedLeading: func(context.Context) {},
 	}); err == nil {
 		t.Fatal("missing OnStoppedLeading should fail")
 	}
-	if _, err := New(client, Config{
+	if _, _, err := newElector(client, Config{
 		LeaseName:        "app",
 		LeaseDuration:    time.Second,
 		RenewDeadline:    2 * time.Second, // 违反 renew < lease
@@ -301,7 +302,7 @@ func TestConfigValidation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("renewDeadline >= leaseDuration should fail")
 	}
-	if _, err := New(client, Config{
+	if _, _, err := newElector(client, Config{
 		LeaseName:        "app",
 		LeaseDuration:    15 * time.Second,
 		RenewDeadline:    5 * time.Second,
@@ -311,7 +312,7 @@ func TestConfigValidation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("retryPeriod >= renewDeadline should fail")
 	}
-	if _, err := New(client, Config{
+	if _, _, err := newElector(client, Config{
 		LeaseName:        "app",
 		LeaseDuration:    15 * time.Second,
 		RenewDeadline:    6 * time.Second,
@@ -321,7 +322,7 @@ func TestConfigValidation(t *testing.T) {
 	}); err == nil {
 		t.Fatal("renewDeadline <= retryPeriod*1.2 should fail")
 	}
-	if _, err := New(client, Config{
+	if _, _, err := newElector(client, Config{
 		LeaseName:        "app",
 		LeaseDuration:    15 * time.Second,
 		RenewDeadline:    9 * time.Second,
@@ -332,7 +333,7 @@ func TestConfigValidation(t *testing.T) {
 		t.Fatal("renewDeadline < retryPeriod*1.2 should fail")
 	}
 	// 全零走默认值（15s/10s/2s），满足全部约束
-	if _, err := New(client, Config{
+	if _, _, err := newElector(client, Config{
 		LeaseName:        "app",
 		OnStartedLeading: func(context.Context) {},
 		OnStoppedLeading: func() {},
