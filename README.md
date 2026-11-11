@@ -25,7 +25,7 @@ go get github.com/oekit/k8s@v0.2.3
 | 包 | import 路径 | 做什么 |
 |---|---|---|
 | `k8s`（模块根包） | `github.com/oekit/k8s` | `RESTConfig`（解析顺序：显式 KubeconfigPath → KUBECONFIG 显式意图 → in-cluster → ~/.kube/config；QPS/Burst 默认 50/100、负值=禁用限流（client-go 契约）、UserAgent 默认 oekit-k8s）、`NewClientset`、`NewDynamicClient`（CRD/GVR）、`InCluster()` 探测（判定对齐 rest.InClusterConfig） |
-| `leaderelection` | `github.com/oekit/k8s/leaderelection` | Lease 选主简化封装：`New`/`Run`（阻塞当选，退出原因上抛：ctx 取消返回 `ctx.Err()`，失权返回 `ErrLostLeadership`；失权与 ctx 取消并存时失权优先，续约失败与取消同窗不掩蔽成 `ctx.Err()`）+ `OnStartedLeading`/`OnStoppedLeading`/`OnNewLeader` 回调（`OnStoppedLeading` 是 elector 退出回调，client-go 无条件触发、不区分失权/关停——判断失权用 `Run` 返回值）；`Config.ReleaseOnCancel` 优雅关停立即释放 Lease（默认 false：继任者等租约自然过期，最长 15s 空窗）；Namespace 默认 POD_NAMESPACE → default；仅要求 Lease get/create/update 权限 |
+| `leaderelection` | `github.com/oekit/k8s/leaderelection` | Lease 选主简化封装：`Run`（唯一入口，#90；阻塞当选，退出原因上抛：ctx 取消返回 `ctx.Err()`，失权返回 `ErrLostLeadership`；失权与 ctx 取消并存时失权优先，续约失败与取消同窗不掩蔽成 `ctx.Err()`）；`New` 已 Deprecated（自行 le.Run 拿不到失权错误面，v0.3.0 移除）+ `OnStartedLeading`/`OnStoppedLeading`/`OnNewLeader` 回调（`OnStoppedLeading` 是 elector 退出回调，client-go 无条件触发、不区分失权/关停——判断失权用 `Run` 返回值）；`Config.ReleaseOnCancel` 优雅关停立即释放 Lease（默认 false：继任者等租约自然过期，最长 15s 空窗）；Namespace 默认 POD_NAMESPACE → default；仅要求 Lease get/create/update 权限 |
 
 ## 快速使用
 

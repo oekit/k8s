@@ -105,13 +105,19 @@ type Config struct {
 }
 
 // New 创建 LeaderElector（不阻塞；调用方持有并自行 Run）。
+//
+// Deprecated: 失权错误面只有 Run 一条入口提供（#90 收敛）——自行 le.Run
+// 的调用方拿不到续约事件记录器，无法区分 ErrLostLeadership 与 ctx 取消，
+// 退出原因契约退化为「OnStoppedLeading + 自查 ctx」。请改用 Run（退出
+// 原因经返回值上抛：失权 ErrLostLeadership、ctx 取消 ctx.Err()，失权与
+// 取消同窗时失权优先）。New 按弃用流程保留，v0.3.0 起移除。
 func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector, error) {
 	le, _, err := newElector(client, cfg)
 	return le, err
 }
 
-// newElector 是 New 的内核，额外返回续约事件记录器（#81 失权判定用，
-// 仅 Run 消费）。
+// newElector 是选主构造内核（Run 与测试消费；New 是其兼容薄壳，
+// 已 Deprecated），额外返回续约事件记录器（#81 失权判定用）。
 func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector, *renewRecorder, error) {
 	if cfg.LeaseName == "" {
 		return nil, nil, fmt.Errorf("k8s leaderelection: lease name is empty")
