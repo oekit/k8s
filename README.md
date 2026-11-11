@@ -81,7 +81,8 @@ client-go 默认 QPS 5/Burst 10 对 controller 类负载偏保守；本仓默认
 QPS 50/Burst 100，可用 `Config{QPS: ..., Burst: ...}` 覆盖。三态语义对齐
 client-go（#80）：0 = 默认 50/100，正数 = 覆盖，**负值 = 禁用客户端限流**
 （迁移自裸 client-go 的 `QPS:-1/Burst:-1` 场景，不再被静默改写成默认值）。
-`Timeout` 默认 0（不设单请求超时）——Watch/长流式调用必须保持 0。
+`Timeout` <=0 均为不设（默认 0）——负值无 client-go 契约，按 0 处理（#92），
+勿按 QPS/Burst 的负值直觉传负数；Watch/长流式调用必须保持 0。
 
 ## 边界
 
