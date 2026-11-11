@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -146,6 +147,20 @@ func TestRESTConfigNegativeQPSBurstDisablesRateLimit(t *testing.T) {
 	}
 	if rc.QPS != -1 || rc.Burst != -1 {
 		t.Fatalf("QPS/Burst = %v/%v, want -1/-1 (client-go: negative disables client-side rate limiting)", rc.QPS, rc.Burst)
+	}
+}
+
+// #92：Timeout 负值无 client-go 契约（rest.Config 负 Timeout 只会让请求
+// 即刻超时），与 QPS/Burst 的「负值=禁用限流」不同——按 0 处理（不设
+// 单请求超时），语义已在 godoc 明示，不得静默透传负值。
+func TestRESTConfigNegativeTimeoutTreatedAsUnset(t *testing.T) {
+	p := writeKubeconfig(t)
+	rc, err := RESTConfig(Config{KubeconfigPath: p, Timeout: -time.Second})
+	if err != nil {
+		t.Fatalf("RESTConfig: %v", err)
+	}
+	if rc.Timeout != 0 {
+		t.Fatalf("Timeout = %v, want 0 (negative has no client-go contract, treated as unset, #92)", rc.Timeout)
 	}
 }
 
