@@ -105,6 +105,13 @@ type Config struct {
 }
 
 // New 创建 LeaderElector（不阻塞；调用方持有并自行 Run）。
+//
+// ⚠️ 失权语义缺口（#90）：经 New 拿到 elector **自行 Run** 的调用方拿不到
+// ErrLostLeadership 区分——#81 的失权判定依赖 Run 内部的 renewRecorder
+// （newElector 的第二返回值，New 在此丢弃）。自行 Run 时失权会被掩蔽成
+// ctx.Err()，失权副本按「优雅关停」零退出吞掉告警——恰是 #81 要修的原始
+// 故障形态。生产入口用 [Run]（错误面含失权分类）；确需自持 elector 时，
+// 自行实现等价失权判定（参照 Run 的 stoppedWhileAlive + rec.lost()）。
 func New(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector, error) {
 	le, _, err := newElector(client, cfg)
 	return le, err

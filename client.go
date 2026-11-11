@@ -34,7 +34,9 @@ type Config struct {
 	// （client-go 契约，迁移自裸 client-go 的 QPS:-1/Burst:-1 场景，#80）。
 	QPS   float32 `yaml:"qps"`
 	Burst int     `yaml:"burst"`
-	// Timeout 是单请求超时；0 表示不设（Watch/长流式调用必须保持 0）。
+	// Timeout 是单请求超时；<=0 均为不设（0 = 用 client-go 缺省，负值
+	// 静默忽略——rest.Config 的负 Timeout 无意义，与 QPS/Burst 的
+	// 「负值 = 显式禁用限流」契约不同域，#92；Watch/长流式调用必须保持 0）。
 	Timeout time.Duration `yaml:"timeout"`
 	// UserAgent 是请求 UA（默认 "oekit-k8s"，便于 apiserver 审计归因）。
 	UserAgent string `yaml:"userAgent"`
@@ -79,11 +81,17 @@ func RESTConfig(cfg Config) (*rest.Config, error) {
 		if err != nil {
 			return nil, err
 		}
-	case InCluster():
+	case os.Getenv("KUBERNETES_SERVICE_HOST") != "" && os.Getenv("KUBERNETES_SERVICE_PORT") != "":
+		// in-cluster 实取合一（#91）：门控改用 env 直判——与 InCluster() 的
+		// 判定面一致（该函数即「双 env 检查 + rest.InClusterConfig 试取」），
+		// 门内实取一次。此前经 InCluster() 预判 + 分支内再取，每次客户端
+		// 构造重复读 SA token 两遍，两调之间 token 可被卸载（TOCTOU，靠
+		// 回退链兜底，白付一次读 + 告警噪音）。InCluster() 保留给外部
+		// 探测用途，不再用于本解析路径。
 		rc, err = rest.InClusterConfig()
 		if err != nil {
-			// InCluster 判定已与 rest.InClusterConfig 对齐，此处仅剩判定后
-			// token 被卸载之类的竞态：不截断回退链，退回 kubeconfig 并告警（#79）。
+			// 双 env 就绪仍失败 ⇒ 仅剩判定后 token 被卸载之类的竞态：
+			// 不截断回退链，退回 kubeconfig 并告警（#79）。
 			log.Warn("in-cluster config unavailable, falling back to kubeconfig", logx.ErrKey, err)
 			inClusterErr := err
 			rc, err = loadDefaultKubeconfig()
