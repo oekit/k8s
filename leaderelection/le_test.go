@@ -22,7 +22,7 @@ func startElector(t *testing.T, client *fake.Clientset, name string,
 	done := make(chan struct{})
 	le, _, err := newElector(client, Config{
 		LeaseName:        "app",
-		Identity:         name, // 显式身份：默认 hostname 会让同进程双 elector 互认
+		Identity:         name, // 显式身份，保证断言确定性（默认值自 #100 起已是 hostname_pid_随机后缀，进程唯一）
 		LeaseDuration:    2 * time.Second,
 		RenewDeadline:    time.Second,
 		RetryPeriod:      200 * time.Millisecond,

@@ -26,7 +26,9 @@
 //	}
 //
 // Namespace 默认取 POD_NAMESPACE 环境变量，再回退 "default"；
-// Identity 默认取 hostname。
+// Identity 默认取「hostname_pid_随机后缀」（进程唯一，#100）——hostname
+// 是主机级标识，同主机两进程 / 同 Pod 两容器会互认身份、双双当选，打破
+// 兜底互斥；Deployment/StatefulSet 建议显式传 Pod 名。
 //
 // Run 返回后应尽快退出进程，不要复用同一进程以同一 Identity 再入选举
 // （重新参与选主在语义上等同于未退出，等于主动放弃提前释放的价值）。
@@ -34,9 +36,12 @@ package leaderelection
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -62,10 +67,16 @@ type Config struct {
 	LeaseName string
 	// Namespace 是 Lease 所在命名空间（默认 POD_NAMESPACE 环境变量 → "default"）。
 	Namespace string
-	// Identity 是候选人标识（默认 hostname；StatefulSet 场景建议显式传
-	// Pod 名保证唯一）。
+	// Identity 是候选人标识（默认「hostname_pid_随机后缀」，进程唯一，#100；
+	// Deployment/StatefulSet 场景建议显式传 Pod 名——可读且有稳定的语义
+	// 归属；同主机多进程 / 同 Pod 多容器场景**必须**用默认值或自行保证
+	// 进程唯一，hostname 是主机级标识，两进程同 identity 会让 client-go
+	// 的「租约已被他人持有」判定失效，两副本同时当选）。
 	Identity string
-	// LeaseDuration 是租约时长（默认 15s，须大于 RenewDeadline）。
+	// LeaseDuration 是租约时长（默认 15s，须大于 RenewDeadline；**必须为
+	// 整秒且 ≥1s**，#101——client-go 把租约按整秒写入 Lease 资源，亚秒值
+	// 被截断为 0 秒 ⇒ 竞争者恒判「租约已过期」⇒ 不同 identity 的两个副本
+	// 同时当选；1500ms 这类非整秒会被截短，对外声明的租约比实际短）。
 	LeaseDuration time.Duration
 	// RenewDeadline 是续约窗口（默认 10s；窗口内续约失败即放弃领导权，
 	// 须满足 > RetryPeriod*1.2，见 New 的校验）。
@@ -141,7 +152,13 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 		if err != nil {
 			return nil, nil, fmt.Errorf("k8s leaderelection: hostname: %w", err)
 		}
-		id = h
+		// #100：默认 identity 必须**进程唯一**——hostname 是主机级标识，
+		// 同主机两进程 / 同 Pod 两容器（sidecar 与主容器）identity 相同 ⇒
+		// client-go 的「租约已被他人持有且未过期」拦截被 IsLeader()（比对
+		// holder identity）短路 ⇒ 两副本同时当选，兜底互斥被打破且无告警。
+		// 三层组合：hostname 区分主机、pid 区分同主机多进程、随机后缀兜底
+		// pid 复用（容器内 pid 回绕）与跨主机撞名。
+		id = h + "_" + strconv.Itoa(os.Getpid()) + "_" + randomSuffix()
 	}
 	leaseDuration, renewDeadline, retryPeriod := cfg.LeaseDuration, cfg.RenewDeadline, cfg.RetryPeriod
 	if leaseDuration == 0 {
@@ -152,6 +169,16 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 	}
 	if retryPeriod == 0 {
 		retryPeriod = defaultRetryPeriod
+	}
+	// #101：租约必须为整秒且 ≥1s——client-go 把租约按整秒写入 Lease 资源
+	// （resourcelock/leaselock.go: int32(LeaseDuration/time.Second)），亚秒值
+	// 被截断为 0 秒 ⇒ 竞争者 isLeaseValid 恒判「已过期」⇒ 不同 identity 的
+	// 两个副本也同时当选（静默脑裂，现象会被误判为业务 bug）。1500ms 这类
+	// 非整秒会被截短 0.5s，对外声明的租约比实际短。构造期 fail-fast 与本
+	// 函数其余时长校验同款。
+	if leaseDuration < time.Second || leaseDuration%time.Second != 0 {
+		return nil, nil, fmt.Errorf("k8s leaderelection: leaseDuration (%s) must be a whole number of seconds >= 1s (client-go writes the lease duration in whole seconds; sub-second values are truncated to 0 and break mutual exclusion)",
+			leaseDuration)
 	}
 	if renewDeadline >= leaseDuration {
 		return nil, nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be < leaseDuration (%s)",
@@ -190,6 +217,17 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 	}
 	log.Info("elector created", "lease", cfg.LeaseName, "namespace", ns, "identity", id)
 	return le, rec, nil
+}
+
+// randomSuffix 生成 4 字节随机十六进制后缀（#100 默认 identity 的第三层）。
+// crypto/rand 失败极罕见（OS 熵源不可用），退化为纳秒时间戳后缀——兜底层
+// 只要求「同主机同 pid 复用窗口内不重」。
+func randomSuffix() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // ErrLostLeadership 表示 elector 因失去领导权（续约窗口内续约失败）而退出。

@@ -32,6 +32,10 @@ type Config struct {
 	// QPS/Burst 是客户端限流：0 = 未配置（默认 50/100——client-go 默认 5/10
 	// 对 controller 类负载偏保守）；正数 = 覆盖；负值 = 禁用客户端限流
 	// （client-go 契约，迁移自裸 client-go 的 QPS:-1/Burst:-1 场景，#80）。
+	// 禁用是**两字段联动**语义（#99）：任一字段为负即两个字段都置 -1——
+	// client-go 的禁用形态是 QPS:-1/Burst:-1 成对出现，单独只设一个负值
+	// 会产出 QPS>0 && Burst<=0 的非法组合（NewClientset 构造期被拒；
+	// NewDynamicClient 限流器建成 rate.NewLimiter(50,-1)，每个请求都被挡回）。
 	QPS   float32 `yaml:"qps"`
 	Burst int     `yaml:"burst"`
 	// Timeout 是单请求超时；<=0 均为不设（#92）——负值无 client-go 契约，
@@ -118,17 +122,25 @@ func RESTConfig(cfg Config) (*rest.Config, error) {
 			log.Info("in-cluster config loaded")
 		}
 	}
-	// 0 = 未配置取默认；非 0 一律透传——负值是 client-go 契约的
-	// 「禁用客户端限流」，不得吞成默认值（#80）。
-	if cfg.QPS != 0 {
-		rc.QPS = cfg.QPS
-	} else if rc.QPS == 0 {
-		rc.QPS = defaultQPS
-	}
-	if cfg.Burst != 0 {
-		rc.Burst = cfg.Burst
-	} else if rc.Burst == 0 {
-		rc.Burst = defaultBurst
+	// 0 = 未配置取默认；正数透传；负值 = 禁用客户端限流——不得吞成默认值
+	// （#80），且两字段联动置 -1（#99）：client-go 的禁用契约要求
+	// QPS:-1/Burst:-1 成对，单独一个负值 + 另一个取默认/正值的组合是
+	// client-go 侧的非法形态（clientset 拒构造；dynamic 限流器
+	// rate.NewLimiter(qps, -1) 每次请求必挡回）。
+	if cfg.QPS < 0 || cfg.Burst < 0 {
+		rc.QPS = -1
+		rc.Burst = -1
+	} else {
+		if cfg.QPS != 0 {
+			rc.QPS = cfg.QPS
+		} else if rc.QPS == 0 {
+			rc.QPS = defaultQPS
+		}
+		if cfg.Burst != 0 {
+			rc.Burst = cfg.Burst
+		} else if rc.Burst == 0 {
+			rc.Burst = defaultBurst
+		}
 	}
 	if cfg.Timeout > 0 {
 		rc.Timeout = cfg.Timeout
