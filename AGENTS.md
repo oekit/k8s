@@ -1,7 +1,7 @@
 # AGENTS.md — oekit/k8s
 
 > Kubernetes 客户端封装——RESTConfig/Clientset/DynamicClient 构建（显式 kubeconfig → KUBECONFIG 显式意图 → in-cluster 自动 → ~/.kube/config 逐级回退，QPS/Burst 限流默认 50/100、负值=禁用客户端限流）+ leaderelection 子包 Lease 选主简化封装（OnStartedLeading/OnStoppedLeading/OnNewLeader 回调，主备单活，仅要求 Lease CRUD 权限；失权与 ctx 取消并存时失权优先上抛 ErrLostLeadership，续约失败与取消同窗不掩蔽）
-> 当前版本：`v0.2.3` · module：`github.com/oekit/k8s` · org：[oekit = Open Easy Kit](https://oekit.github.io)
+> 当前版本：`v0.2.4` · module：`github.com/oekit/k8s` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
 `./`、`leaderelection/`
