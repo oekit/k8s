@@ -1,11 +1,17 @@
 package k8s
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -182,5 +188,65 @@ func TestNewDynamicClient(t *testing.T) {
 	}
 	if dc == nil {
 		t.Fatal("dynamic client nil")
+	}
+}
+
+// #99 回归：负值 = 禁用客户端限流是**两字段联动**语义——任一字段为负即
+// QPS/Burst 都置 -1（client-go 的禁用契约是 QPS:-1/Burst:-1 成对）。
+// 此前两字段各自独立补默认/透传，单独设 Burst:-1 产出 QPS=50/Burst=-1：
+// NewClientset 构造期被 client-go 拒绝（burst is required to be greater
+// than 0...），NewDynamicClient 更糟——限流器建成 rate.NewLimiter(50,-1)，
+// 构造成功但每个请求都被挡回。
+func TestRESTConfigSingleNegativeFieldLinksBothToDisabled(t *testing.T) {
+	p := writeKubeconfig(t)
+	cases := []struct {
+		name string
+		cfg  Config
+	}{
+		{"仅 Burst:-1", Config{KubeconfigPath: p, Burst: -1}},
+		{"仅 QPS:-1", Config{KubeconfigPath: p, QPS: -1}},
+		{"QPS 正值 + Burst:-1", Config{KubeconfigPath: p, QPS: 100, Burst: -1}},
+		{"QPS:-1 + Burst 正值", Config{KubeconfigPath: p, QPS: -1, Burst: 200}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			rc, err := RESTConfig(tt.cfg)
+			if err != nil {
+				t.Fatalf("RESTConfig: %v", err)
+			}
+			if rc.QPS != -1 || rc.Burst != -1 {
+				t.Fatalf("QPS/Burst = %v/%v, want -1/-1（#99：禁用限流必须两字段联动，产出的配置要在 client-go 侧可用）", rc.QPS, rc.Burst)
+			}
+		})
+	}
+}
+
+// #99 功能回归：单独设 Burst:-1 时产出的配置在 client-go 侧可用——
+// dynamic 客户端能正常发请求（修复前限流器 rate.NewLimiter(50,-1) 把每个
+// 请求都挡回：rate: Wait(n=1) exceeds limiter's burst -1）。
+func TestNewDynamicClient_SingleNegativeBurstIssuesRequests(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"PodList","items":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	p := filepath.Join(t.TempDir(), "kubeconfig")
+	kc := strings.Replace(testKubeconfig, "https://192.168.1.10:6443", srv.URL, 1)
+	if err := os.WriteFile(p, []byte(kc), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+
+	dc, err := NewDynamicClient(Config{KubeconfigPath: p, Burst: -1})
+	if err != nil {
+		t.Fatalf("NewDynamicClient(Burst:-1): %v", err)
+	}
+	pods, err := dc.Resource(schema.GroupVersionResource{Version: "v1", Resource: "pods"}).
+		Namespace("default").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("dynamic List err = %v（#99：禁用客户端限流的配置必须可用，不得被限流器挡回）", err)
+	}
+	if pods == nil {
+		t.Fatal("List returned nil list")
 	}
 }
