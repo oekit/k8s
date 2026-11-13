@@ -2,6 +2,12 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.2.6] — 2026-11-13
+
+- 限流/选主契约：负值限流两字段联动禁用（#99）、默认 Identity 进程唯一化（#100）、LeaseDuration 整秒校验（#101）、doc.go 选主示例非法限定符修正（#104）、LeaderElectionConfig.Name 缺省（#105）、observe 取消豁免双 sentinel 对齐（#108）
+
+关联问题单：k8s#99、k8s#100、k8s#101、k8s#104、k8s#105、k8s#108。
+
 ## [v0.2.5] — 2026-11-13
 
 - fix: WithTimeout 关停不再误记失权（#108）——renewRecorder.observe 取消豁免对齐 workflow#61 口径（Canceled 与 DeadlineExceeded 双 sentinel），计划内超时关停返回 ctx.Err() 而非 ErrLostLeadership；选主指标 label 填 LeaseName（#105）——LeaderElectionConfig.Name 此前未填恒空串；doc.go 快速接入示例改真实 import 路径（#104）——k8s.leaderelection 限定符无法编译；随车补发 11-12 sweep 已合入未发版的客户端限流禁用两字段联动（#99）+ 默认 Identity 进程唯一（#100）+ LeaseDuration 整秒校验（#101）
