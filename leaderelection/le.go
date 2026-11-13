@@ -201,6 +201,12 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 	}
 	rec := &renewRecorder{Interface: lock}
 	le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
+		// #105：Name 是 client-go 选主指标（leaderOn/leaderOff/slowpathExercised）
+		// 的 label 与 Check() 报文里的 lease 名，与 LeaseMeta.Name（Lease 资源名）
+		// 是两个不同字段——此前未填，指标 label 恒为空串（多 elector/多租户
+		// 同进程无法区分）。缺省与 LeaseName 同值（调用方经由 Config.LeaseName
+		// 可配置）；LeaseName 构造期必填非空，label 不会为空。
+		Name:          cfg.LeaseName,
 		Lock:          rec,
 		LeaseDuration: leaseDuration,
 		RenewDeadline: renewDeadline,
@@ -262,11 +268,23 @@ func (r *renewRecorder) Update(ctx context.Context, ler resourcelock.LeaderElect
 	return err
 }
 
+// isCancellationErr 判断错误链是否含 context 取消类 sentinel（workflow#61
+// 分类口径：Canceled 与 DeadlineExceeded 同属取消类副作用，#108）。
+func isCancellationErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 // observe 入账一次 create/update 的续约结果：holderIdentity 非空是持有方
 // 的续约（acquire 首次成功后进入持有态），置空是 ReleaseOnCancel 的主动
-// 释放——成功即清账，优雅交棒不算失权。取消类失败是关停副作用：
-// workflow#61 口径「取消副作用不得顶真实失败」反向同理，取消副作用也不得
-// 记成续约失败；其余失败（含续约窗口超时）即续约失败事件，事件同刻入账。
+// 释放——成功即清账，优雅交棒不算失权。取消类失败是关停副作用，与
+// workflow 的 isCancellationErr 完全同口径：Canceled 与 DeadlineExceeded
+// 两个 sentinel 都豁免（#108）——调用方 WithTimeout/WithDeadline 包住 Run
+// 时，deadline 触发瞬间的在途续约以 context.DeadlineExceeded 收场（不是
+// Canceled），此前只豁免 Canceled ⇒ 计划内的超时关停被记成失权，Run 返回
+// ErrLostLeadership 而非 ctx.Err()，按本包推荐用法即 log.Fatal + 失权重启
+// 告警。真失权（连接拒绝、冲突、租约被抢、续约窗口耗尽）不受影响，仍入账；
+// 客户端请求级超时（如 rest.Config.Timeout）恰逢调用方 ctx 已 done 的窗口
+// 里同样被豁免，但真实失权仍会经 OnStoppedLeading（ctx 尚在）路径如实上抛。
 func (r *renewRecorder) observe(ler resourcelock.LeaderElectionRecord, err error) {
 	if ler.HolderIdentity == "" {
 		if err == nil {
@@ -280,7 +298,7 @@ func (r *renewRecorder) observe(ler resourcelock.LeaderElectionRecord, err error
 		r.renewFailing.Store(false)
 		return
 	}
-	if r.leading.Load() && !errors.Is(err, context.Canceled) {
+	if r.leading.Load() && !isCancellationErr(err) {
 		r.renewFailing.Store(true)
 	}
 }
