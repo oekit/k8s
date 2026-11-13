@@ -2,6 +2,12 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.2.5] — 2026-11-13
+
+- fix: WithTimeout 关停不再误记失权（#108）——renewRecorder.observe 取消豁免对齐 workflow#61 口径（Canceled 与 DeadlineExceeded 双 sentinel），计划内超时关停返回 ctx.Err() 而非 ErrLostLeadership；选主指标 label 填 LeaseName（#105）——LeaderElectionConfig.Name 此前未填恒空串；doc.go 快速接入示例改真实 import 路径（#104）——k8s.leaderelection 限定符无法编译；随车补发 11-12 sweep 已合入未发版的客户端限流禁用两字段联动（#99）+ 默认 Identity 进程唯一（#100）+ LeaseDuration 整秒校验（#101）
+
+关联问题单：k8s#108、k8s#105、k8s#104。
+
 ## [v0.2.4] — 2026-11-12
 
 - - refactor(leaderelection): 失权错误面收敛到 Run 单入口，New 降级 Deprecated（#90）——经 New 自行 le.Run 的调用方拿不到续约事件记录器、无法区分 ErrLostLeadership 与 ctx 取消，双入口退出原因契约收敛为 Run；New 保外部行为兼容（签名与行为不变），v0.3.0 起移除，测试改走 newElector 内核。语义差异：New 路径退出原因契约退化为「OnStoppedLeading + 自查 ctx」
