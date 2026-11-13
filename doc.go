@@ -16,18 +16,26 @@
 //	// 显式 kubeconfig
 //	cs, err := k8s.NewClientset(k8s.Config{KubeconfigPath: "/path/to/kubeconfig"})
 //
-// 选主（同 kube-apiserver Lease 协议，二进制/多副本单活）：
+// 选主（同 kube-apiserver Lease 协议，二进制/多副本单活）。leaderelection
+// 是独立子包，与 k8s 根包分开 import（#104——Go 不允许经父包限定符访问
+// 子包，k8s.leaderelection 无法编译）：
 //
-//	err := k8s.leaderelection.Run(ctx, cs, k8s.leaderelection.Config{
+//	import (
+//	    "github.com/oekit/k8s"
+//	    "github.com/oekit/k8s/leaderelection"
+//	)
+//
+//	err := leaderelection.Run(ctx, cs, leaderelection.Config{
 //	    LeaseName: "my-app",
 //	    OnStartedLeading: func(ctx context.Context) { serve(ctx) },
 //	    OnStoppedLeading: func() {}, // client-go 要求非 nil；退出原因用 Run 返回值区分
 //	})
 //	// 失权（续约失败放弃领导权）返回 ErrLostLeadership——此时才退出交由重启
 //	// （含续约失败与取消同窗：失权优先上抛，不被掩蔽成 ctx.Err()，#81）；
-//	// ctx 取消返回 ctx.Err()——优雅关停（含从未当选的副本），正常退出即可，
-//	// 勿无条件 log.Fatal（否则每次发布/缩容所有副本都非零退出）
-//	if errors.Is(err, k8s.leaderelection.ErrLostLeadership) {
+//	// ctx 取消（含 WithTimeout 的 deadline 触发，#108）返回 ctx.Err()——优雅
+//	// 关停（含从未当选的副本），正常退出即可，勿无条件 log.Fatal（否则每次
+//	// 发布/缩容所有副本都非零退出）
+//	if errors.Is(err, leaderelection.ErrLostLeadership) {
 //	    log.Fatal("lost leadership, exiting for restart")
 //	}
 package k8s
