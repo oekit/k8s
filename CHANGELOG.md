@@ -2,6 +2,10 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.3.1] — 2026-11-16
+
+- refactor: fmt.Errorf → oekit/pkg/errors 三形态对位替换（#520 替换波）+ 依赖地板抬至 pkg v0.52.0。文案逐字节同形（测试断言零修改），多 %w/%w 居中/哨兵前置形态按仓规保留
+
 ## [v0.3.0] — 2026-11-13
 
 - **BREAKING**：兑现 #90 弃用承诺，删除 leaderelection.New。下游迁移：持有 New(...)+自行 le.Run(ctx) 的形态改走 leaderelection.Run——失权退出经返回值 ErrLostLeadership 上抛，ctx 取消返回 ctx.Err()（失权与取消同窗时失权优先），不再退化成「OnStoppedLeading + 自查 ctx」。
