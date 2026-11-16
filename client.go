@@ -1,12 +1,12 @@
 package k8s
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/oekit/logx"
+	pkgerrors "github.com/oekit/pkg/errors"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -85,7 +85,7 @@ func RESTConfig(cfg Config) (*rest.Config, error) {
 	case cfg.KubeconfigPath != "":
 		rc, err = clientcmd.BuildConfigFromFlags("", cfg.KubeconfigPath)
 		if err != nil {
-			return nil, fmt.Errorf("k8s: load kubeconfig %s: %w", cfg.KubeconfigPath, err)
+			return nil, pkgerrors.Wrapf(err, "k8s: load kubeconfig %s", cfg.KubeconfigPath)
 		}
 		log.Info("kubeconfig loaded", "path", cfg.KubeconfigPath)
 	case os.Getenv("KUBECONFIG") != "":
@@ -114,7 +114,7 @@ func RESTConfig(cfg Config) (*rest.Config, error) {
 			rc, err = loadDefaultKubeconfig()
 			if err != nil {
 				if suspectInCluster {
-					return nil, fmt.Errorf("k8s: in-cluster config (%v) and kubeconfig fallback: %w", inClusterErr, err)
+					return nil, pkgerrors.Wrapf(err, "k8s: in-cluster config (%v) and kubeconfig fallback", inClusterErr)
 				}
 				return nil, err
 			}
@@ -164,7 +164,7 @@ func NewClientset(cfg Config) (*kubernetes.Clientset, error) {
 	}
 	cs, err := kubernetes.NewForConfig(rc)
 	if err != nil {
-		return nil, fmt.Errorf("k8s: new clientset: %w", err)
+		return nil, pkgerrors.Wrapf(err, "k8s: new clientset")
 	}
 	return cs, nil
 }
@@ -177,7 +177,7 @@ func NewDynamicClient(cfg Config) (dynamic.Interface, error) {
 	}
 	dc, err := dynamic.NewForConfig(rc)
 	if err != nil {
-		return nil, fmt.Errorf("k8s: new dynamic client: %w", err)
+		return nil, pkgerrors.Wrapf(err, "k8s: new dynamic client")
 	}
 	return dc, nil
 }
@@ -189,7 +189,7 @@ func loadDefaultKubeconfig() (*rest.Config, error) {
 	rc, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		loadingRules, &clientcmd.ConfigOverrides{}).ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("k8s: no usable kubeconfig (set KUBECONFIG or run in-cluster): %w", err)
+		return nil, pkgerrors.Wrapf(err, "k8s: no usable kubeconfig (set KUBECONFIG or run in-cluster)")
 	}
 	log.Info("kubeconfig loaded from default rules")
 	return rc, nil

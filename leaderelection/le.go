@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/oekit/logx"
+	pkgerrors "github.com/oekit/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/leaderelection"
@@ -119,13 +120,13 @@ type Config struct {
 // #90 的弃用承诺于 v0.3.0 删除），额外返回续约事件记录器（#81 失权判定用）。
 func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.LeaderElector, *renewRecorder, error) {
 	if cfg.LeaseName == "" {
-		return nil, nil, fmt.Errorf("k8s leaderelection: lease name is empty")
+		return nil, nil, pkgerrors.New("k8s leaderelection: lease name is empty")
 	}
 	if cfg.OnStartedLeading == nil {
-		return nil, nil, fmt.Errorf("k8s leaderelection: OnStartedLeading is required")
+		return nil, nil, pkgerrors.New("k8s leaderelection: OnStartedLeading is required")
 	}
 	if cfg.OnStoppedLeading == nil {
-		return nil, nil, fmt.Errorf("k8s leaderelection: OnStoppedLeading is required")
+		return nil, nil, pkgerrors.New("k8s leaderelection: OnStoppedLeading is required")
 	}
 	ns := cfg.Namespace
 	if ns == "" {
@@ -138,7 +139,7 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 	if id == "" {
 		h, err := os.Hostname()
 		if err != nil {
-			return nil, nil, fmt.Errorf("k8s leaderelection: hostname: %w", err)
+			return nil, nil, pkgerrors.Wrapf(err, "k8s leaderelection: hostname")
 		}
 		// #100：默认 identity 必须**进程唯一**——hostname 是主机级标识，
 		// 同主机两进程 / 同 Pod 两容器（sidecar 与主容器）identity 相同 ⇒
@@ -165,18 +166,18 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 	// 非整秒会被截短 0.5s，对外声明的租约比实际短。构造期 fail-fast 与本
 	// 函数其余时长校验同款。
 	if leaseDuration < time.Second || leaseDuration%time.Second != 0 {
-		return nil, nil, fmt.Errorf("k8s leaderelection: leaseDuration (%s) must be a whole number of seconds >= 1s (client-go writes the lease duration in whole seconds; sub-second values are truncated to 0 and break mutual exclusion)",
+		return nil, nil, pkgerrors.Newf("k8s leaderelection: leaseDuration (%s) must be a whole number of seconds >= 1s (client-go writes the lease duration in whole seconds; sub-second values are truncated to 0 and break mutual exclusion)",
 			leaseDuration)
 	}
 	if renewDeadline >= leaseDuration {
-		return nil, nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be < leaseDuration (%s)",
+		return nil, nil, pkgerrors.Newf("k8s leaderelection: renewDeadline (%s) must be < leaseDuration (%s)",
 			renewDeadline, leaseDuration)
 	}
 	// retryPeriod 须显著小于 renewDeadline（client-go 建议留 1.2 倍抖动裕度）：
 	// 否则续约窗口内仅一次重试机会，网络抖动一次就放弃领导权。
 	// retryPeriod*6/5 即 retryPeriod*1.2（整数运算，避免浮点转换）。
 	if minRenew := retryPeriod * 6 / 5; renewDeadline <= minRenew {
-		return nil, nil, fmt.Errorf("k8s leaderelection: renewDeadline (%s) must be > retryPeriod (%s) * 1.2",
+		return nil, nil, pkgerrors.Newf("k8s leaderelection: renewDeadline (%s) must be > retryPeriod (%s) * 1.2",
 			renewDeadline, retryPeriod)
 	}
 
@@ -207,7 +208,7 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 		ReleaseOnCancel: cfg.ReleaseOnCancel,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("k8s leaderelection: new elector: %w", err)
+		return nil, nil, pkgerrors.Wrapf(err, "k8s leaderelection: new elector")
 	}
 	log.Info("elector created", "lease", cfg.LeaseName, "namespace", ns, "identity", id)
 	return le, rec, nil
