@@ -2,6 +2,10 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.3.2] — 2026-11-18
+
+- leaderelection randomSuffix 迁 stringx.RandomTokenOrFallback(pkg v0.53.0 原语),error 经 Wrapf 上抛不再静默
+
 ## [v0.3.1] — 2026-11-16
 
 - refactor: fmt.Errorf → oekit/pkg/errors 三形态对位替换（#520 替换波）+ 依赖地板抬至 pkg v0.52.0。文案逐字节同形（测试断言零修改），多 %w/%w 居中/哨兵前置形态按仓规保留
