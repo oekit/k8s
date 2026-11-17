@@ -36,8 +36,6 @@ package leaderelection
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -47,6 +45,7 @@ import (
 
 	"github.com/oekit/logx"
 	pkgerrors "github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/stringx"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/leaderelection"
@@ -147,7 +146,11 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 		// holder identity）短路 ⇒ 两副本同时当选，兜底互斥被打破且无告警。
 		// 三层组合：hostname 区分主机、pid 区分同主机多进程、随机后缀兜底
 		// pid 复用（容器内 pid 回绕）与跨主机撞名。
-		id = h + "_" + strconv.Itoa(os.Getpid()) + "_" + randomSuffix()
+		suffix, err := randomSuffix()
+		if err != nil {
+			return nil, nil, pkgerrors.Wrapf(err, "k8s leaderelection: random suffix")
+		}
+		id = h + "_" + strconv.Itoa(os.Getpid()) + "_" + suffix
 	}
 	leaseDuration, renewDeadline, retryPeriod := cfg.LeaseDuration, cfg.RenewDeadline, cfg.RetryPeriod
 	if leaseDuration == 0 {
@@ -216,13 +219,14 @@ func newElector(client kubernetes.Interface, cfg Config) (*leaderelection.Leader
 
 // randomSuffix 生成 4 字节随机十六进制后缀（#100 默认 identity 的第三层）。
 // crypto/rand 失败极罕见（OS 熵源不可用），退化为纳秒时间戳后缀——兜底层
-// 只要求「同主机同 pid 复用窗口内不重」。
-func randomSuffix() string {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
+// 只要求「同主机同 pid 复用窗口内不重」。随机与 hex 编码委托 pkg/stringx
+// 单源（#528 消费方迁移，编码与原 encoding/hex 实现逐字节一致）；err 仅为
+// 参数/用法错误（nBytes<=0、enc 非法、fallback 为 nil）——常量实参下不可达，
+// 原样上抛交由调用方包装。
+func randomSuffix() (string, error) {
+	return stringx.RandomTokenOrFallback(4, stringx.TokenHex, func() string {
 		return strconv.FormatInt(time.Now().UnixNano(), 36)
-	}
-	return hex.EncodeToString(b[:])
+	})
 }
 
 // ErrLostLeadership 表示 elector 因失去领导权（续约窗口内续约失败）而退出。
