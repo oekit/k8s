@@ -63,8 +63,8 @@ github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee h1:W5t00kpgFd
 github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/oekit/logx v0.12.0 h1:N0EEDHK83jw9w9m5C2zQxRVSB2ifvR/nqyrOmcUrX/o=
-github.com/oekit/logx v0.12.0/go.mod h1:aIxiaegg9jzyvXhGXNcjq7ljAdVC2ERUCHqGN+thui0=
+github.com/oekit/logx v0.12.1 h1:7vYBKiImDcCDqEXwl8BrQSp29MvFSBUOWFTPm33fw8s=
+github.com/oekit/logx v0.12.1/go.mod h1:aIxiaegg9jzyvXhGXNcjq7ljAdVC2ERUCHqGN+thui0=
 github.com/oekit/pkg v0.56.0 h1:w0I7YiSVmTtP5FSh7KRD5tTFueqL2Jexo8ewrDdJxeQ=
 github.com/oekit/pkg v0.56.0/go.mod h1:Cr6sJpBX2a0gAIgLa32+NY69h/UZtuN6L1ZdXtP9upo=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
