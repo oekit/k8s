@@ -2,6 +2,10 @@
 
 所有 notable 变更记录如下。格式参考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [v0.3.3] — 2026-11-23
+
+- build: 依赖地板对齐（矩阵地板波次）——新地板：github.com/oekit/logx v0.12.1 github.com/oekit/pkg v0.60.0 。零行为变化；已发布产物的 go.mod 地板此前滞后于矩阵登记版本，本版把新地板焊进已发布产物。
+
 ## [v0.3.2] — 2026-11-18
 
 - leaderelection randomSuffix 迁 stringx.RandomTokenOrFallback(pkg v0.53.0 原语),error 经 Wrapf 上抛不再静默
