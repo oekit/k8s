@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/oekit/logx v0.12.1
-	github.com/oekit/pkg v0.60.0
+	github.com/oekit/pkg v0.61.1
 	k8s.io/api v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
